@@ -111,8 +111,11 @@ Convenciones transversales:
   - `ps`: D_A muestral (n−1), two-pass en f64, NaN estricto, select_ps inclusivo y ordenado
   - `network`: doble umbral + chequeo de orden estricto de épocas; design_matrix rechaza ref>sec; union-find
   - `inversion`: SVD cacheada (rcond estilo LAPACK), solve en f64, serie relativa a época 0; NaN por píxel (NaN por par anotado para después)
-- [ ] Lote B: `io` + `unwrap` + `atmosphere`
-- [ ] Verificador entre lotes: `cargo test` + cumplimiento de contratos (lote A verificado ✔)
+- [x] Lote B: `io` + `unwrap` + `atmosphere` (2026-06-11; 29 tests nuevos, 68 totales verdes, clippy limpio)
+  - `io`: formato stack.json definido y documentado en el módulo; complejos como pares `*_re.tif`/`*_im.tif` (el reader nativo de surtgis ignora el parámetro band en multibanda); round-trip testeado
+  - `unwrap`: flood-fill quality-guided, vecindad 4, islas por NaN con re-siembra (offset 2πk por isla documentado)
+  - `atmosphere`: pasa-alto temporal (prefix sums, ventana truncada simétrica) + gaussiano espacial separable normalizado por máscara; artefacto suave atenuado ~7×, deformación lineal intacta
+- [x] Verificador entre lotes: `cargo test` + cumplimiento de contratos (Nivel 0 completo ✔)
 
 ### Fase 3: Integración Nivel 1-2 (subagente + orquestador)
 - [ ] `pipeline` end-to-end
