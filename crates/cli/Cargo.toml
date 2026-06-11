@@ -1,0 +1,17 @@
+[package]
+name = "insar-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description.workspace = true
+
+[[bin]]
+name = "insar"
+path = "src/main.rs"
+
+[dependencies]
+insar-core.workspace = true
+clap.workspace = true
+anyhow.workspace = true
