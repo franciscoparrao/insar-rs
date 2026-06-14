@@ -117,10 +117,18 @@ Convenciones transversales:
   - `atmosphere`: pasa-alto temporal (prefix sums, ventana truncada simétrica) + gaussiano espacial separable normalizado por máscara; artefacto suave atenuado ~7×, deformación lineal intacta
 - [x] Verificador entre lotes: `cargo test` + cumplimiento de contratos (Nivel 0 completo ✔)
 
-### Fase 3: Integración Nivel 1-2 (subagente + orquestador)
-- [ ] `pipeline` end-to-end
-- [ ] `cli` funcional
-- [ ] Review de código (subagente /rust o /review)
+### Fase 3: Integración Nivel 1-2 (subagente + orquestador) — COMPLETA (2026-06-13)
+- [x] `pipeline` end-to-end (run_sbas: io→unwrap→inversion→atmosphere→velocity)
+- [x] `cli` funcional (verificado real: info/network/run sobre stack generado por el ejemplo synthetic_stack)
+- [x] Test e2e: recupera velocidad central con error ~2.4e-9 m/año (70 tests verdes, clippy limpio)
+- [x] Review de código: sin bugs críticos/altos; núcleo numérico correcto y auto-consistente
+
+#### Caveats del review para la paridad con MintPy (Fase 4) — metodológicos, no defectos
+1. **NoData all-or-nothing** (inversion, estimate_velocity): un solo par/época no-finito anula TODA la serie del píxel. MintPy invierte sobre el subset de pares disponible → diferirá en *cuántos píxeles sobreviven* en datos reales con decorrelación parcial. Fix futuro: subsetear filas de A por píxel y re-resolver.
+2. **APS=0 en épocas extremas** (atmosphere): el pasa-alto temporal da 0 en primera/última época; esos extremos conservan ruido atmosférico y tienen el mayor leverage en el ajuste lineal de velocidad. Considerar estimación one-sided en bordes.
+3. **Velocidad = OLS no ponderado** sobre serie completa; MintPy puede ponderar por coherencia. Consistente con (1).
+4. **Orden APS post-inversión**: variante legítima de SBAS; al comparar con MintPy, configurar MintPy con el mismo orden (filtrado temporal-espacial post-inversión) o las velocidades no calzarán aunque ambos sean correctos.
+5. Salida es **LOS** (m/año), no vertical (incidence_deg/heading_deg se almacenan pero no se usan en v0.1). El cross-check debe comparar LOS.
 
 ### Fase 4: Validación (Nivel 3)
 - [ ] Conseguir stack público coregistrado (ej. tutorial MintPy: Fernandina/Galápagos ARIA, o ISCE San Francisco)
