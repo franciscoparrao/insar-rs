@@ -4,3 +4,6 @@
 *.tiff
 /data
 /output
+/.venv-mintpy
+/validation/export
+/validation/*.png

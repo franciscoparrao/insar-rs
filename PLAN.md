@@ -130,10 +130,14 @@ Convenciones transversales:
 4. **Orden APS post-inversión**: variante legítima de SBAS; al comparar con MintPy, configurar MintPy con el mismo orden (filtrado temporal-espacial post-inversión) o las velocidades no calzarán aunque ambos sean correctos.
 5. Salida es **LOS** (m/año), no vertical (incidence_deg/heading_deg se almacenan pero no se usan en v0.1). El cross-check debe comparar LOS.
 
-### Fase 4: Validación (Nivel 3)
-- [ ] Conseguir stack público coregistrado (ej. tutorial MintPy: Fernandina/Galápagos ARIA, o ISCE San Francisco)
-- [ ] Script Python de comparación: serie insar-rs vs MintPy (RMSE, correlación)
-- [ ] Documentar paridad en `docs/validation.md`
+### Fase 4: Validación (Nivel 3) — COMPLETA (2026-06-14) ✔ PARIDAD CONFIRMADA
+- [x] Stack: FernandinaSenDT128 (tutorial MintPy, Sentinel-1 ISCE, 98 épocas / 288 ifgs / 450×600)
+- [x] MintPy 1.6.2 instalado en .venv-mintpy; ifgramStack.h5 desde load_data; inversión -w no + velocidad
+- [x] Ingesta en insar-rs (examples/validate_fernandina.rs) de las fases exactas exportadas
+- [x] Comparación (validation/compare.py): **serie RMSE 0.0029 mm, r=1.000000; velocidad RMSE 0.0070 mm/año, r=1.000000, pendiente 0.9995** — paridad al nivel del redondeo f32
+- [x] Documentado en docs/validation.md + figura validation/validation_velocity.png
+- Metodología: misma fase desenrollada a ambos lados, inversión no ponderada sin correcciones, referenciados al mismo píxel (147/579). Aísla la inversión SBAS.
+- Scripts en validation/ (export_ifgstack.py, compare.py); data/ y .venv-mintpy/ gitignored.
 
 ### Fase 5: Tardía v0.1
 - [ ] Crate `python` (PyO3) sobre el core estable
