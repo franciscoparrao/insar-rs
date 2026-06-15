@@ -46,6 +46,8 @@
 //! El lector de formato ISCE binario plano (.int/.unw + XML) es fase tardía
 //! v0.1 — ver PLAN.md.
 
+pub mod isce;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 

@@ -139,10 +139,16 @@ Convenciones transversales:
 - Metodología: misma fase desenrollada a ambos lados, inversión no ponderada sin correcciones, referenciados al mismo píxel (147/579). Aísla la inversión SBAS.
 - Scripts en validation/ (export_ifgstack.py, compare.py); data/ y .venv-mintpy/ gitignored.
 
-### Fase 5: Tardía v0.1
+### Fase 5: Tardía v0.1 — EN CURSO (2026-06-14)
+- [x] **Lector ISCE nativo** (`io::isce`) — COMPLETO (2026-06-15). Cierra el loop "lee ISCE e invierte sin Python".
+  - `parse_vrt` (roxmltree) + `read_raw_band` (offsets GDAL VRTRawRasterBand, Float32 LSB) + `read_isce_unwrapped_stack` (descubre pares YYYYMMDD_YYYYMMDD, banda 2 = fase, baselines promediando "Bperp (average):") + `read_isce_coherence` (banda 1 de .cor).
+  - 4 tests unitarios (vrt sintético) + 1 test #[ignore] con datos reales (98 épocas/288 pares/450×600, red conexa) — pasa en 4.8s.
+  - CLI: subcomando `insar isce <ifg_dir> <out> [--baselines DIR]` → velocity.tif + series/. Probado real.
+  - **Validación nativa end-to-end**: leer .unw → invert_sbas → estimate_velocity vs velocity.h5 de MintPy → RMSE 0.0070 mm/año, r=1.000000, pendiente 0.9995 (idéntico al camino vía h5). Lectura 3.3s + inversión 1.8s para 270k píxeles.
 - [ ] Crate `python` (PyO3) sobre el core estable
-- [ ] Lector ISCE binario plano (.int/.unw + XML)
 - [ ] Benchmarks (criterion) vs MintPy en tiempo de ejecución
+
+Dependencia añadida: `roxmltree` (parser XML read-only, sin deps transitivas) para el `.vrt`.
 
 ## Prompts para Subagentes (Fase 2)
 

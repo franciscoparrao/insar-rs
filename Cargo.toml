@@ -31,6 +31,9 @@ serde_json = "1"
 # CLI
 clap = { version = "4", features = ["derive"] }
 
+# parser XML read-only (para .vrt de ISCE) — sin deps transitivas
+roxmltree = "0.20"
+
 # I/O raster: GeoTIFF nativo puro Rust (sin GDAL) + helpers de rasters complejos
 surtgis-core = { path = "../surtgis/crates/core", default-features = false, features = ["parallel", "complex"] }
 

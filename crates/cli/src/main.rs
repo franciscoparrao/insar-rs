@@ -40,6 +40,16 @@ enum Command {
         #[arg(long)]
         ps_threshold: Option<f32>,
     },
+    /// SBAS directo desde interferogramas ISCE (.unw ya desenrollados): inversión + velocidad
+    Isce {
+        /// Directorio de interferogramas ISCE (subdirs YYYYMMDD_YYYYMMDD)
+        input: PathBuf,
+        /// Directorio de salida (velocity.tif + series/)
+        output: PathBuf,
+        /// Directorio de baselines (opcional)
+        #[arg(long)]
+        baselines: Option<PathBuf>,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -77,6 +87,19 @@ fn main() -> anyhow::Result<()> {
             let products = run_sbas(&config)?;
             let (rows, cols) = products.series.dims();
             println!("serie invertida: {} épocas, {rows} × {cols}", products.series.epochs.len());
+        }
+        Command::Isce { input, output, baselines } => {
+            use insar_core::io::isce::{IsceLoadConfig, read_isce_unwrapped_stack};
+            let config = IsceLoadConfig { baselines_dir: baselines, ..Default::default() };
+            let stack = read_isce_unwrapped_stack(&input, &config)?;
+            let (rows, cols) = stack.dims();
+            println!("ISCE: {} épocas, {} pares, {rows} × {cols}", stack.epochs.len(), stack.pairs.len());
+            let series = insar_core::inversion::invert_sbas(&stack, None)?;
+            let velocity = insar_core::inversion::estimate_velocity(&series)?;
+            std::fs::create_dir_all(&output)?;
+            insar_core::io::write_velocity(&velocity, &output.join("velocity.tif"))?;
+            insar_core::io::write_series(&series, &output.join("series"))?;
+            println!("escrito: {}/velocity.tif + series/", output.display());
         }
     }
     Ok(())

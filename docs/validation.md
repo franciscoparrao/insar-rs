@@ -66,6 +66,27 @@ Los residuos son de orden micrométrico y se explican por:
   convención de años decimales (insar-rs usa días/365.25; MintPy fracciones de
   año por `datetime`). Despreciable.
 
+## Camino nativo ISCE (sin Python en el loop)
+
+El lector ISCE nativo (`io::isce`, Fase 5) permite repetir la validación
+**sin MintPy ni HDF5**: lee los `.unw` de ISCE directamente, invierte y estima
+velocidad. Contra el mismo `velocity.h5` de referencia da resultados idénticos:
+
+| Producto | RMSE | max\|Δ\| | Pearson r | Pendiente |
+|----------|------|----------|-----------|-----------|
+| Velocidad LOS (camino nativo) | 0.0070 mm/año | 0.38 mm/año | 1.000000 | 0.9995 |
+
+Lectura de los 288 interferogramas: 3.3 s; inversión + velocidad de 270 k
+píxeles: 1.8 s. Reproducible con:
+
+```bash
+cargo run --release -p insar-core --example validate_fernandina_isce -- \
+  data/FernandinaSenDT128/merged/interferograms data/FernandinaSenDT128/baselines \
+  validation/export/insar_velocity_isce.f32
+# o vía CLI:
+insar isce data/FernandinaSenDT128/merged/interferograms /tmp/out --baselines data/FernandinaSenDT128/baselines
+```
+
 ## Veredicto
 
 El núcleo de inversión SBAS de insar-rs es **numéricamente equivalente a MintPy**
