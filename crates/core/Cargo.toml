@@ -21,3 +21,10 @@ serde.workspace = true
 serde_json.workspace = true
 surtgis-core.workspace = true
 roxmltree.workspace = true
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "sbas"
+harness = false

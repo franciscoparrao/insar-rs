@@ -7,3 +7,4 @@
 /.venv-mintpy
 /validation/export
 /validation/*.png
+/target/criterion
