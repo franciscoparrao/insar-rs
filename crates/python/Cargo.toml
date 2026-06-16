@@ -1,0 +1,19 @@
+[package]
+name = "insar-python"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Python bindings (PyO3) for the insar-rs SBAS engine"
+
+[lib]
+name = "insar_rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+insar-core.workspace = true
+surtgis-core.workspace = true
+ndarray.workspace = true
+chrono.workspace = true
+pyo3 = { version = "0.22", features = ["extension-module", "abi3-py39"] }
+numpy = "0.22"

@@ -1,0 +1,16 @@
+[build-system]
+requires = ["maturin>=1.5,<2"]
+build-backend = "maturin"
+
+[project]
+name = "insar-rs"
+description = "Python bindings for the insar-rs SBAS engine (Rust)"
+requires-python = ">=3.9"
+classifiers = [
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering :: GIS",
+]
+dynamic = ["version"]
+
+[tool.maturin]
+module-name = "insar_rs"

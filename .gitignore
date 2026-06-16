@@ -8,3 +8,5 @@
 /validation/export
 /validation/*.png
 /target/criterion
+/crates/python/*.egg-info
+__pycache__/

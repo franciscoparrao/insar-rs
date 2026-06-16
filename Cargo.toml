@@ -1,7 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/cli"]
-# crate python (PyO3) se agrega en fase tardía v0.1 — ver PLAN.md
+members = ["crates/core", "crates/cli", "crates/python"]
 
 [workspace.package]
 version = "0.1.0"

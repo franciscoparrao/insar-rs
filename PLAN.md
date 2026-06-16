@@ -145,10 +145,12 @@ Convenciones transversales:
   - 4 tests unitarios (vrt sintético) + 1 test #[ignore] con datos reales (98 épocas/288 pares/450×600, red conexa) — pasa en 4.8s.
   - CLI: subcomando `insar isce <ifg_dir> <out> [--baselines DIR]` → velocity.tif + series/. Probado real.
   - **Validación nativa end-to-end**: leer .unw → invert_sbas → estimate_velocity vs velocity.h5 de MintPy → RMSE 0.0070 mm/año, r=1.000000, pendiente 0.9995 (idéntico al camino vía h5). Lectura 3.3s + inversión 1.8s para 270k píxeles.
-- [ ] Crate `python` (PyO3) sobre el core estable
-- [ ] Benchmarks (criterion) vs MintPy en tiempo de ejecución
+- [x] Benchmarks (criterion) vs MintPy — COMPLETO (2026-06-15). `benches/sbas.rs`; docs/benchmarks.md. invert_sbas 270k px ~2.9s; inversión real 1.8s vs MintPy 55.7s.
+- [x] Crate `python` (PyO3) — COMPLETO (2026-06-15). `crates/python` (insar_rs): invert_sbas, estimate_velocity, amplitude_dispersion, sbas_from_isce (numpy float32). maturin develop; validado desde Python vs MintPy (RMSE 0.0070 mm/año, r=1.000000). README + pyproject.
 
-Dependencia añadida: `roxmltree` (parser XML read-only, sin deps transitivas) para el `.vrt`.
+Dependencia añadida: `roxmltree` (parser XML read-only) para el `.vrt`; pyo3 0.22 + numpy 0.22 (abi3-py39) en el crate python.
+
+## Estado: MVP v0.1 COMPLETO (Fases 1-5). Listo para paper.
 
 ## Prompts para Subagentes (Fase 2)
 
