@@ -60,8 +60,9 @@ Los residuos son de orden micrométrico y se explican por:
   `f32`. El RMSE de serie (~3 µm) está en el límite de `f32`.
 - **max\|Δ\| de 1.7 mm** se concentra en píxeles con observaciones parciales de
   la red (no presentes en todos los interferogramas), donde el orden de
-  operaciones difiere. insar-rs (v0.1) invierte estos píxeles con la red
-  completa; ver caveat de NoData all-or-nothing en `PLAN.md`.
+  operaciones difiere. Desde el polish post-v0.1, insar-rs invierte cada píxel
+  con su subconjunto de pares válidos (NaN-por-par), con la pseudoinversa
+  cacheada por patrón de máscara para mantener el rendimiento.
 - **Velocidad, pendiente 0.9995**: diferencia <0.05 %, consistente con la
   convención de años decimales (insar-rs usa días/365.25; MintPy fracciones de
   año por `datetime`). Despreciable.

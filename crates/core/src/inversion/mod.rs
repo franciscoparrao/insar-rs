@@ -6,6 +6,7 @@
 //! los desplazamientos entre épocas consecutivas; la serie acumulada se
 //! reconstruye relativa a la primera época.
 
+use std::collections::{HashMap, HashSet};
 use std::f64::consts::PI;
 
 use nalgebra::{DMatrix, DVector};
@@ -14,7 +15,7 @@ use rayon::prelude::*;
 
 use crate::error::{InsarError, Result};
 use crate::network;
-use crate::types::{DisplacementSeries, PsCandidate, UnwrappedStack, VelocityMap};
+use crate::types::{DisplacementSeries, IfgPair, PsCandidate, UnwrappedStack, VelocityMap};
 
 /// Convierte fase desenrollada (radianes) a desplazamiento LOS (metros):
 /// `d = -λ/(4π)·φ` (alejamiento del sensor = negativo).
@@ -29,10 +30,12 @@ pub fn phase_to_displacement(phase_rad: f64, wavelength_m: f64) -> f64 {
 /// La serie resultante es relativa a la primera época (desplazamiento 0).
 /// Error si la red es desconectada ([`crate::network::is_connected`]).
 ///
-/// Manejo de NoData (MVP): un píxel con cualquier fase no finita (NaN/inf)
-/// en cualquiera de sus pares queda con la serie completa en NaN.
-/// Nota para después: soportar NaN por par requeriría re-factorizar la
-/// matriz de diseño por píxel (subconjunto de filas), no solo cachear la SVD.
+/// Manejo de NoData por par: cada píxel se invierte con los pares que tienen
+/// fase finita. Si todos sus pares son válidos se usa la SVD cacheada de la
+/// matriz de diseño completa (camino rápido); si faltan algunos, se resuelve
+/// con una matriz de diseño reducida a los pares válidos (camino por píxel).
+/// Un píxel queda con la serie completa en NaN solo si sus pares válidos no
+/// conectan todas las épocas (red desconectada → serie indeterminada).
 pub fn invert_sbas(
     stack: &UnwrappedStack,
     ps: Option<&[PsCandidate]>,
@@ -97,30 +100,83 @@ pub fn invert_sbas(
     let phases = stack.data.view();
     let wavelength_m = stack.meta.wavelength_m;
 
-    // Paralelización por filas: cada fila escribe su vista (épocas × cols).
+    // Inversión por píxel con pseudoinversa cacheada por patrón de validez:
+    // los píxeles con todos los pares válidos usan la SVD completa (camino
+    // rápido); los demás se agrupan por su conjunto de pares válidos y comparten
+    // una pseudoinversa reducida, evitando una SVD por píxel.
+    let n_words = n_pairs.div_ceil(64);
+    let mask_bit = |key: &mut [u64], k: usize| key[k / 64] |= 1u64 << (k % 64);
+
+    // Pasada 1: patrones de máscara parcial distintos (en paralelo por fila).
+    let unique_masks: HashSet<Vec<u64>> = cols_by_row
+        .par_iter()
+        .enumerate()
+        .map(|(r, cols)| {
+            let mut set: HashSet<Vec<u64>> = HashSet::new();
+            for &c in cols {
+                let mut key = vec![0u64; n_words];
+                let mut n_valid = 0usize;
+                for k in 0..n_pairs {
+                    if phases[[k, r, c]].is_finite() {
+                        mask_bit(&mut key, k);
+                        n_valid += 1;
+                    }
+                }
+                if n_valid != n_pairs {
+                    set.insert(key);
+                }
+            }
+            set
+        })
+        .reduce(HashSet::new, |mut a, b| {
+            a.extend(b);
+            a
+        });
+
+    // Pasada 2: pseudoinversa reducida por patrón (en paralelo). `None` si la
+    // red reducida queda desconectada o con menos pares que incógnitas.
+    let solvers: HashMap<Vec<u64>, Option<DMatrix<f64>>> = unique_masks
+        .into_par_iter()
+        .map(|mask| {
+            let valid_idx: Vec<usize> = (0..n_pairs)
+                .filter(|&k| mask[k / 64] & (1u64 << (k % 64)) != 0)
+                .collect();
+            let solver = reduced_pinv(&valid_idx, &stack.pairs, n_epochs, n_unknowns);
+            (mask, solver)
+        })
+        .collect();
+
+    // Pasada 3: inversión por píxel (en paralelo por fila).
     let mut row_views: Vec<_> = out.axis_iter_mut(Axis(1)).collect();
     row_views.par_iter_mut().enumerate().for_each(|(r, out_row)| {
-        let mut b = DVector::<f64>::zeros(n_pairs);
+        let mut b_vals: Vec<f64> = Vec::with_capacity(n_pairs);
+        let mut key = vec![0u64; n_words];
         for &c in &cols_by_row[r] {
-            let mut valid = true;
+            b_vals.clear();
+            key.iter_mut().for_each(|w| *w = 0);
             for k in 0..n_pairs {
                 let phi = phases[[k, r, c]];
-                if !phi.is_finite() {
-                    valid = false;
-                    break;
+                if phi.is_finite() {
+                    mask_bit(&mut key, k);
+                    b_vals.push(phase_to_displacement(phi as f64, wavelength_m));
                 }
-                b[k] = phase_to_displacement(phi as f64, wavelength_m);
-            }
-            if !valid {
-                continue; // serie completa NaN para este píxel (MVP)
             }
             // x = incrementos de desplazamiento entre épocas consecutivas.
-            let x = &pinv * &b;
-            out_row[[0, c]] = 0.0;
-            let mut acc = 0.0_f64;
-            for e in 1..n_epochs {
-                acc += x[e - 1];
-                out_row[[e, c]] = acc as f32;
+            let x = if b_vals.len() == n_pairs {
+                Some(&pinv * DVector::from_column_slice(&b_vals)) // camino rápido
+            } else {
+                match solvers.get(&key) {
+                    Some(Some(rp)) => Some(rp * DVector::from_column_slice(&b_vals)),
+                    _ => None, // sin pares válidos o red reducida desconectada
+                }
+            };
+            if let Some(x) = x {
+                out_row[[0, c]] = 0.0;
+                let mut acc = 0.0_f64;
+                for e in 1..n_epochs {
+                    acc += x[e - 1];
+                    out_row[[e, c]] = acc as f32;
+                }
             }
         }
     });
@@ -130,6 +186,36 @@ pub fn invert_sbas(
         epochs: stack.epochs.clone(),
         meta: stack.meta.clone(),
     })
+}
+
+/// Pseudoinversa de la matriz de diseño reducida al subconjunto de pares
+/// válidos (`valid_idx`, ascendentes). Devuelve `None` (→ serie NaN) si hay
+/// menos pares que incógnitas o si los pares no conectan todas las épocas
+/// (red reducida desconectada → sistema rank-deficiente).
+fn reduced_pinv(
+    valid_idx: &[usize],
+    pairs: &[IfgPair],
+    n_epochs: usize,
+    n_unknowns: usize,
+) -> Option<DMatrix<f64>> {
+    if valid_idx.len() < n_unknowns {
+        return None;
+    }
+    let reduced: Vec<IfgPair> = valid_idx.iter().map(|&k| pairs[k]).collect();
+    if !network::is_connected(&reduced, n_epochs) {
+        return None;
+    }
+    let m = reduced.len();
+    // Matriz de diseño reducida: fila i = par válido i, 1.0 en columnas
+    // [reference, secondary) (incrementos entre épocas consecutivas).
+    let a = DMatrix::<f64>::from_fn(m, n_unknowns, |i, j| {
+        let p = &reduced[i];
+        if p.reference <= j && j < p.secondary { 1.0 } else { 0.0 }
+    });
+    let svd = a.svd(true, true);
+    let s_max = svd.singular_values.iter().copied().fold(0.0_f64, f64::max);
+    let eps = s_max * (m.max(n_unknowns) as f64) * f64::EPSILON;
+    svd.pseudo_inverse(eps).ok()
 }
 
 /// Velocidad media LOS (m/año) por ajuste lineal de la serie de cada píxel.
@@ -194,6 +280,9 @@ pub fn estimate_velocity(series: &DisplacementSeries) -> Result<VelocityMap> {
 
 #[cfg(test)]
 mod tests {
+    // En los tests `e` indexa tanto la serie 3D como el vector de verdad d[e];
+    // el bucle por rango es el más legible aquí.
+    #![allow(clippy::needless_range_loop)]
     use super::*;
     use crate::types::{
         DisplacementSeries, Epoch, IfgPair, PsCandidate, StackMeta, UnwrappedStack,
@@ -288,6 +377,39 @@ mod tests {
     }
 
     #[test]
+    fn inversion_con_par_faltante_recupera() {
+        // pairs_4ep: idx0=(0,1) idx1=(1,2) idx2=(2,3) idx3=(0,2) idx4=(1,3).
+        let mut stack = synthetic_stack(1, 2);
+        let d = true_displacements(&stack.epochs);
+        // Píxel (0,0): elimina el par redundante (0,2); los restantes
+        // [(0,1),(1,2),(2,3),(1,3)] aún conectan las 4 épocas → debe recuperar.
+        stack.data[[3, 0, 0]] = f32::NAN;
+        let series = invert_sbas(&stack, None).unwrap();
+        for e in 0..4 {
+            let got = series.data[[e, 0, 0]] as f64;
+            assert!((got - d[e]).abs() < 1e-5, "par faltante, época {e}: {got} vs {}", d[e]);
+            // Píxel (0,1) intacto: camino rápido, también recupera.
+            assert!((series.data[[e, 0, 1]] as f64 - d[e]).abs() < 1e-5);
+        }
+    }
+
+    #[test]
+    fn inversion_nan_si_pares_validos_desconectan_red() {
+        let mut stack = synthetic_stack(1, 2);
+        let d = true_displacements(&stack.epochs);
+        // Píxel (0,0): elimina los dos pares que tocan la época 3: (2,3) y (1,3).
+        // Quedan (0,1),(1,2),(0,2) → época 3 aislada → serie NaN.
+        stack.data[[2, 0, 0]] = f32::NAN;
+        stack.data[[4, 0, 0]] = f32::NAN;
+        let series = invert_sbas(&stack, None).unwrap();
+        for e in 0..4 {
+            assert!(series.data[[e, 0, 0]].is_nan(), "época {e} debería ser NaN");
+            // Píxel (0,1) intacto recupera normal.
+            assert!((series.data[[e, 0, 1]] as f64 - d[e]).abs() < 1e-5);
+        }
+    }
+
+    #[test]
     fn velocidad_recupera_v_sintetica() {
         let stack = synthetic_stack(2, 3);
         let series = invert_sbas(&stack, None).unwrap();
@@ -335,12 +457,15 @@ mod tests {
     }
 
     #[test]
-    fn pixel_con_nan_queda_todo_nan() {
+    fn pixel_sin_pares_validos_queda_todo_nan() {
         let mut stack = synthetic_stack(2, 3);
-        stack.data[[2, 0, 1]] = f32::NAN; // un solo par contaminado
+        // Todos los pares del píxel (0,1) contaminados → sin observaciones.
+        for k in 0..stack.pairs.len() {
+            stack.data[[k, 0, 1]] = f32::NAN;
+        }
 
         let series = invert_sbas(&stack, None).unwrap();
-        // El píxel contaminado: serie completa NaN, incluida la época 0.
+        // El píxel sin pares válidos: serie completa NaN, incluida la época 0.
         for e in 0..4 {
             assert!(series.data[[e, 0, 1]].is_nan(), "época {e} no es NaN");
         }

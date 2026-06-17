@@ -152,6 +152,15 @@ Dependencia añadida: `roxmltree` (parser XML read-only) para el `.vrt`; pyo3 0.
 
 ## Estado: MVP v0.1 COMPLETO (Fases 1-5). Listo para paper.
 
+### Polish post-v0.1 (2026-06-17)
+- [x] **Inversión NaN-por-par** (resuelve caveat #1 del review): cada píxel se
+  invierte con su subconjunto de pares válidos; NaN solo si la red reducida
+  queda desconectada. Pseudoinversa cacheada por patrón de máscara (3 pasadas:
+  máscaras únicas → pinv por patrón → inversión). Stress-test real (20% dropout,
+  270k px): 545s → **1.34s** con el cache (400×), resultado idéntico. 2 tests
+  nuevos (recupera con par faltante; NaN si desconexión). examples/robustness_dropout.rs.
+- [ ] Pendientes de los caveats: APS en épocas extremas (#2), velocidad OLS no ponderada (#3), métrica de coherencia temporal como calidad de inversión.
+
 ## Prompts para Subagentes (Fase 2)
 
 Template — reemplazar `{módulo}`:
