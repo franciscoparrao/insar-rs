@@ -18,7 +18,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 use insar_core::inversion::{estimate_velocity as core_velocity, invert_sbas as core_invert};
-use insar_core::io::isce::{IsceLoadConfig, read_isce_unwrapped_stack};
+use insar_core::io::isce::{IsceLoadConfig, read_isce_coherence, read_isce_unwrapped_stack};
 use insar_core::ps::amplitude_dispersion as core_ad;
 use insar_core::types::{
     AmplitudeStack, DisplacementSeries, Epoch, IfgPair, SENTINEL1_WAVELENGTH_M, StackMeta,
@@ -127,12 +127,50 @@ fn amplitude_dispersion<'py>(
     Ok(disp.into_pyarray_bound(py))
 }
 
-/// Lee un directorio de interferogramas ISCE, invierte y estima velocidad.
+/// Coherencia temporal (Pepe & Lanari 2006), métrica de calidad de la
+/// inversión en [0, 1]. `phase`: (n_pares, filas, cols) radianes; `series`:
+/// (n_épocas, filas, cols) m. Devuelve (filas, cols) float32.
+#[pyfunction]
+#[pyo3(signature = (phase, series, refs, secs, epoch_days, wavelength_m=SENTINEL1_WAVELENGTH_M))]
+fn temporal_coherence<'py>(
+    py: Python<'py>,
+    phase: PyReadonlyArray3<'py, f32>,
+    series: PyReadonlyArray3<'py, f32>,
+    refs: Vec<usize>,
+    secs: Vec<usize>,
+    epoch_days: Vec<i64>,
+    wavelength_m: f64,
+) -> PyResult<Bound<'py, PyArray2<f32>>> {
+    let pairs: Vec<IfgPair> = refs
+        .iter()
+        .zip(&secs)
+        .map(|(&r, &s)| IfgPair { reference: r, secondary: s, perp_baseline_m: 0.0 })
+        .collect();
+    let epochs: Vec<Epoch> = epoch_days.iter().map(|&d| epoch_from_day(d)).collect();
+    let stack = UnwrappedStack {
+        data: phase.as_array().to_owned(),
+        epochs: epochs.clone(),
+        pairs,
+        meta: dummy_meta(wavelength_m, 39.0),
+    };
+    let ds = DisplacementSeries {
+        data: series.as_array().to_owned(),
+        epochs,
+        meta: dummy_meta(wavelength_m, 39.0),
+    };
+    let gamma = insar_core::inversion::temporal_coherence(&stack, &ds).map_err(err)?;
+    Ok(gamma.into_pyarray_bound(py))
+}
+
+/// Lee un directorio de interferogramas ISCE, referencia al píxel de máxima
+/// coherencia media (elimina el offset por interferograma del desenrollado),
+/// invierte y estima velocidad y coherencia temporal.
 ///
-/// Devuelve `(velocity, series, epochs)`:
-///   velocity: (filas, cols) float32 m/año
-///   series:   (n_épocas, filas, cols) float32 m
-///   epochs:   lista de fechas ISO 'YYYY-MM-DD'
+/// Devuelve `(velocity, series, temporal_coherence, epochs)`:
+///   velocity:           (filas, cols) float32 m/año
+///   series:             (n_épocas, filas, cols) float32 m
+///   temporal_coherence: (filas, cols) float32 en [0, 1]
+///   epochs:             lista de fechas ISO 'YYYY-MM-DD'
 #[pyfunction]
 #[pyo3(signature = (ifg_dir, baselines_dir=None, wavelength_m=SENTINEL1_WAVELENGTH_M, incidence_deg=39.0))]
 fn sbas_from_isce<'py>(
@@ -141,20 +179,59 @@ fn sbas_from_isce<'py>(
     baselines_dir: Option<String>,
     wavelength_m: f64,
     incidence_deg: f64,
-) -> PyResult<(Bound<'py, PyArray2<f32>>, Bound<'py, PyArray3<f32>>, Vec<String>)> {
+) -> PyResult<(
+    Bound<'py, PyArray2<f32>>,
+    Bound<'py, PyArray3<f32>>,
+    Bound<'py, PyArray2<f32>>,
+    Vec<String>,
+)> {
     let config = IsceLoadConfig {
         baselines_dir: baselines_dir.map(std::path::PathBuf::from),
         wavelength_m,
         incidence_deg,
         ..Default::default()
     };
-    let stack = read_isce_unwrapped_stack(std::path::Path::new(&ifg_dir), &config).map_err(err)?;
+    let dir = std::path::Path::new(&ifg_dir);
+    let mut stack = read_isce_unwrapped_stack(dir, &config).map_err(err)?;
     let epochs: Vec<String> = stack.epochs.iter().map(|e| e.0.to_string()).collect();
+
+    // Referencia espacial al píxel de máxima coherencia media (o el centro).
+    let (n_rows, n_cols) = stack.dims();
+    let (ref_r, ref_c) = match read_isce_coherence(dir, &config) {
+        Ok(coh) => {
+            let n_pairs = coh.shape()[0];
+            let mut best = (n_rows / 2, n_cols / 2, f32::MIN);
+            for r in 0..n_rows {
+                for c in 0..n_cols {
+                    let (mut sum, mut n) = (0.0_f64, 0u32);
+                    for k in 0..n_pairs {
+                        let v = coh[[k, r, c]];
+                        if v.is_finite() {
+                            sum += v as f64;
+                            n += 1;
+                        }
+                    }
+                    if n > 0 {
+                        let mean = (sum / n as f64) as f32;
+                        if mean > best.2 {
+                            best = (r, c, mean);
+                        }
+                    }
+                }
+            }
+            (best.0, best.1)
+        }
+        Err(_) => (n_rows / 2, n_cols / 2),
+    };
+    insar_core::inversion::reference_to_pixel(&mut stack, ref_r, ref_c).map_err(err)?;
+
     let series = core_invert(&stack, None).map_err(err)?;
     let velocity = core_velocity(&series).map_err(err)?;
+    let gamma = insar_core::inversion::temporal_coherence(&stack, &series).map_err(err)?;
     Ok((
         velocity.data.into_pyarray_bound(py),
         series.data.into_pyarray_bound(py),
+        gamma.into_pyarray_bound(py),
         epochs,
     ))
 }
@@ -164,6 +241,7 @@ fn insar_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(invert_sbas, m)?)?;
     m.add_function(wrap_pyfunction!(estimate_velocity, m)?)?;
     m.add_function(wrap_pyfunction!(amplitude_dispersion, m)?)?;
+    m.add_function(wrap_pyfunction!(temporal_coherence, m)?)?;
     m.add_function(wrap_pyfunction!(sbas_from_isce, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())

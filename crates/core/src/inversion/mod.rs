@@ -23,6 +23,39 @@ pub fn phase_to_displacement(phase_rad: f64, wavelength_m: f64) -> f64 {
     -(wavelength_m / (4.0 * PI)) * phase_rad
 }
 
+/// Inversa de [`phase_to_displacement`]: `φ = -(4π/λ)·d`.
+pub fn displacement_to_phase(displacement_m: f64, wavelength_m: f64) -> f64 {
+    -(4.0 * PI / wavelength_m) * displacement_m
+}
+
+/// Referencia espacial del stack: resta, en cada par, la fase del píxel
+/// `(row, col)` a todos los píxeles. Elimina el offset constante por
+/// interferograma que deja el desenrollado (cada `.unw` tiene una referencia
+/// de fase arbitraria), dejando la serie relativa a ese píxel. Sin este paso
+/// los offsets aparecen como residuos y degradan la coherencia temporal.
+///
+/// Si el píxel de referencia no tiene fase finita en un par, ese par no se
+/// puede referenciar y queda NaN (se descartará por píxel en la inversión).
+/// Error si `(row, col)` está fuera de la grilla.
+pub fn reference_to_pixel(stack: &mut UnwrappedStack, row: usize, col: usize) -> Result<()> {
+    let (n_rows, n_cols) = stack.dims();
+    if row >= n_rows || col >= n_cols {
+        return Err(InsarError::DimensionMismatch(format!(
+            "píxel de referencia ({row}, {col}) fuera de la grilla {n_rows}×{n_cols}"
+        )));
+    }
+    for k in 0..stack.n_layers() {
+        let mut layer = stack.data.index_axis_mut(Axis(0), k);
+        let ref_phase = layer[[row, col]];
+        if ref_phase.is_finite() {
+            layer.mapv_inplace(|v| v - ref_phase);
+        } else {
+            layer.fill(f32::NAN);
+        }
+    }
+    Ok(())
+}
+
 /// Invierte la serie temporal de desplazamiento LOS por píxel.
 /// - `ps = Some(...)`: invierte solo en los candidatos PS; el resto queda NaN.
 /// - `ps = None`: invierte toda la grilla (modo SBAS clásico).
@@ -278,6 +311,67 @@ pub fn estimate_velocity(series: &DisplacementSeries) -> Result<VelocityMap> {
     Ok(VelocityMap { data: out, meta: series.meta.clone() })
 }
 
+/// Coherencia temporal (Pepe & Lanari 2006): consistencia entre las fases
+/// observadas de cada par y las reconstruidas desde la serie invertida. Rango
+/// [0, 1] (1 = ajuste perfecto). Es la métrica de calidad estándar para
+/// enmascarar píxeles poco fiables (p. ej. `γ_temp < 0.7`).
+///
+/// `γ = (1/M)·| Σ_k exp(j·(φ_obs_k − φ_model_k)) |`, donde
+/// `φ_model_k = displacement_to_phase(d_sec − d_ref)` y M es el número de pares
+/// con fase observada finita y serie finita en ambas épocas. El exponencial
+/// complejo es 2π-periódico, así que no requiere desenrollar el residuo.
+/// Píxeles sin pares válidos → NaN.
+pub fn temporal_coherence(
+    stack: &UnwrappedStack,
+    series: &DisplacementSeries,
+) -> Result<Array2<f32>> {
+    let (n_rows, n_cols) = stack.dims();
+    if series.dims() != (n_rows, n_cols) {
+        return Err(InsarError::DimensionMismatch(format!(
+            "serie {:?} vs stack {:?}",
+            series.dims(),
+            (n_rows, n_cols)
+        )));
+    }
+    if series.epochs.len() != stack.epochs.len() {
+        return Err(InsarError::DimensionMismatch(format!(
+            "{} épocas en la serie vs {} en el stack",
+            series.epochs.len(),
+            stack.epochs.len()
+        )));
+    }
+
+    let wavelength_m = stack.meta.wavelength_m;
+    let phases = stack.data.view();
+    let disp = series.data.view();
+    let pairs = &stack.pairs;
+
+    let mut out = Array2::<f32>::from_elem((n_rows, n_cols), f32::NAN);
+    let mut row_views: Vec<_> = out.axis_iter_mut(Axis(0)).collect();
+    row_views.par_iter_mut().enumerate().for_each(|(r, out_row)| {
+        for c in 0..n_cols {
+            let (mut re, mut im, mut m) = (0.0_f64, 0.0_f64, 0usize);
+            for (k, p) in pairs.iter().enumerate() {
+                let obs = phases[[k, r, c]];
+                let d_sec = disp[[p.secondary, r, c]];
+                let d_ref = disp[[p.reference, r, c]];
+                if obs.is_finite() && d_sec.is_finite() && d_ref.is_finite() {
+                    let model = displacement_to_phase((d_sec - d_ref) as f64, wavelength_m);
+                    let dphi = obs as f64 - model;
+                    re += dphi.cos();
+                    im += dphi.sin();
+                    m += 1;
+                }
+            }
+            if m > 0 {
+                out_row[c] = ((re * re + im * im).sqrt() / m as f64) as f32;
+            }
+        }
+    });
+
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     // En los tests `e` indexa tanto la serie 3D como el vector de verdad d[e];
@@ -512,5 +606,90 @@ mod tests {
         };
         let err = estimate_velocity(&series).unwrap_err();
         assert!(matches!(err, InsarError::DimensionMismatch(_)));
+    }
+
+    // ---------- reference_to_pixel ----------
+
+    #[test]
+    fn referencia_elimina_offset_por_par() {
+        let mut stack = synthetic_stack(2, 2);
+        // Añade un offset constante distinto a cada par (todos los píxeles).
+        for k in 0..stack.pairs.len() {
+            let off = 3.0 + k as f32;
+            stack.data.index_axis_mut(ndarray::Axis(0), k).mapv_inplace(|v| v + off);
+        }
+        reference_to_pixel(&mut stack, 0, 0).unwrap();
+        // El píxel de referencia queda en 0 para todos los pares.
+        for k in 0..stack.pairs.len() {
+            assert!(stack.data[[k, 0, 0]].abs() < 1e-6);
+        }
+        // Tras referenciar, la inversión recupera el desplazamiento lineal
+        // (el offset por par desaparece). Píxeles uniformes → serie 0.
+        let series = invert_sbas(&stack, None).unwrap();
+        for e in 0..4 {
+            assert!(series.data[[e, 1, 1]].abs() < 1e-5);
+        }
+    }
+
+    #[test]
+    fn referencia_fuera_de_grilla_es_error() {
+        let mut stack = synthetic_stack(2, 2);
+        assert!(matches!(
+            reference_to_pixel(&mut stack, 5, 0).unwrap_err(),
+            InsarError::DimensionMismatch(_)
+        ));
+    }
+
+    // ---------- temporal_coherence ----------
+
+    #[test]
+    fn coherencia_temporal_uno_en_ajuste_perfecto() {
+        // Stack sintético exacto: la serie invertida reconstruye las fases
+        // observadas sin residuo → γ_temp = 1 en todos los píxeles.
+        let stack = synthetic_stack(2, 3);
+        let series = invert_sbas(&stack, None).unwrap();
+        let gamma = temporal_coherence(&stack, &series).unwrap();
+        assert_eq!(gamma.shape(), &[2, 3]);
+        for &g in gamma.iter() {
+            assert!((g - 1.0).abs() < 1e-5, "γ = {g}");
+        }
+    }
+
+    #[test]
+    fn coherencia_temporal_baja_con_residuo() {
+        // Corromper un par en un píxel introduce un residuo de fase → γ < 1.
+        let mut stack = synthetic_stack(1, 2);
+        let series = invert_sbas(&stack, None).unwrap();
+        // El píxel (0,0) recibe un offset grande en un par tras invertir con
+        // la serie limpia: rompemos la consistencia obs vs modelo.
+        stack.data[[0, 0, 0]] += 2.0; // +2 rad en el par 0
+        let gamma = temporal_coherence(&stack, &series).unwrap();
+        assert!(gamma[[0, 0]] < 0.95, "γ corrupto = {}", gamma[[0, 0]]);
+        assert!((gamma[[0, 1]] - 1.0).abs() < 1e-5, "γ limpio = {}", gamma[[0, 1]]);
+    }
+
+    #[test]
+    fn coherencia_temporal_nan_sin_pares_validos() {
+        let mut stack = synthetic_stack(1, 1);
+        let series = invert_sbas(&stack, None).unwrap();
+        for k in 0..stack.pairs.len() {
+            stack.data[[k, 0, 0]] = f32::NAN;
+        }
+        let gamma = temporal_coherence(&stack, &series).unwrap();
+        assert!(gamma[[0, 0]].is_nan());
+    }
+
+    #[test]
+    fn coherencia_temporal_dim_mismatch_es_error() {
+        let stack = synthetic_stack(2, 3);
+        let series = DisplacementSeries {
+            data: Array3::zeros((4, 2, 2)), // cols distinto
+            epochs: epochs_12d(4),
+            meta: meta(),
+        };
+        assert!(matches!(
+            temporal_coherence(&stack, &series).unwrap_err(),
+            InsarError::DimensionMismatch(_)
+        ));
     }
 }

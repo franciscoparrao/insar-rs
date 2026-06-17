@@ -159,7 +159,15 @@ Dependencia añadida: `roxmltree` (parser XML read-only) para el `.vrt`; pyo3 0.
   máscaras únicas → pinv por patrón → inversión). Stress-test real (20% dropout,
   270k px): 545s → **1.34s** con el cache (400×), resultado idéntico. 2 tests
   nuevos (recupera con par faltante; NaN si desconexión). examples/robustness_dropout.rs.
-- [ ] Pendientes de los caveats: APS en épocas extremas (#2), velocidad OLS no ponderada (#3), métrica de coherencia temporal como calidad de inversión.
+- [x] **Coherencia temporal** (Pepe & Lanari 2006) como calidad de inversión:
+  `inversion::temporal_coherence` (γ = |Σ exp(j(φ_obs−φ_model))|/M). En Fernandina
+  mediana 0.996, 62% γ>0.9. 4 tests. Expuesta en CLI (temporal_coherence.tif) y PyO3.
+- [x] **Referencia espacial de la entrada** (`inversion::reference_to_pixel`):
+  resta el offset constante por interferograma del desenrollado. Sin ella la
+  coherencia temporal salía ~0.1 (offsets de ISCE como residuo). El CLI/PyO3
+  eligen el píxel de máxima coherencia media. No altera la paridad de velocidad
+  vs MintPy (RMSE 0.0070, r=1.000000 confirmado tras el cambio). 2 tests.
+- [ ] Pendientes de los caveats: APS en épocas extremas (#2), velocidad OLS no ponderada (#3).
 
 ## Prompts para Subagentes (Fase 2)
 
