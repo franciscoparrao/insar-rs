@@ -127,6 +127,29 @@ fn amplitude_dispersion<'py>(
     Ok(disp.into_pyarray_bound(py))
 }
 
+/// Incertidumbre (error estándar) de la velocidad LOS por píxel (m/año).
+/// series: (n_épocas, filas, cols) float32; epoch_days: día de cada época.
+#[pyfunction]
+fn estimate_velocity_uncertainty<'py>(
+    py: Python<'py>,
+    series: PyReadonlyArray3<'py, f32>,
+    epoch_days: Vec<i64>,
+) -> PyResult<Bound<'py, PyArray2<f32>>> {
+    let data: Array3<f32> = series.as_array().to_owned();
+    if epoch_days.len() != data.len_of(Axis(0)) {
+        return Err(PyValueError::new_err(
+            "epoch_days debe tener tantas entradas como el eje 0 de series",
+        ));
+    }
+    let ds = DisplacementSeries {
+        data,
+        epochs: epoch_days.iter().map(|&d| epoch_from_day(d)).collect(),
+        meta: dummy_meta(SENTINEL1_WAVELENGTH_M, 39.0),
+    };
+    let se = insar_core::inversion::estimate_velocity_uncertainty(&ds).map_err(err)?;
+    Ok(se.into_pyarray_bound(py))
+}
+
 /// Coherencia temporal (Pepe & Lanari 2006), métrica de calidad de la
 /// inversión en [0, 1]. `phase`: (n_pares, filas, cols) radianes; `series`:
 /// (n_épocas, filas, cols) m. Devuelve (filas, cols) float32.
@@ -166,8 +189,9 @@ fn temporal_coherence<'py>(
 /// coherencia media (elimina el offset por interferograma del desenrollado),
 /// invierte y estima velocidad y coherencia temporal.
 ///
-/// Devuelve `(velocity, series, temporal_coherence, epochs)`:
+/// Devuelve `(velocity, velocity_std, series, temporal_coherence, epochs)`:
 ///   velocity:           (filas, cols) float32 m/año
+///   velocity_std:       (filas, cols) float32 m/año (error estándar)
 ///   series:             (n_épocas, filas, cols) float32 m
 ///   temporal_coherence: (filas, cols) float32 en [0, 1]
 ///   epochs:             lista de fechas ISO 'YYYY-MM-DD'
@@ -180,6 +204,7 @@ fn sbas_from_isce<'py>(
     wavelength_m: f64,
     incidence_deg: f64,
 ) -> PyResult<(
+    Bound<'py, PyArray2<f32>>,
     Bound<'py, PyArray2<f32>>,
     Bound<'py, PyArray3<f32>>,
     Bound<'py, PyArray2<f32>>,
@@ -227,9 +252,11 @@ fn sbas_from_isce<'py>(
 
     let series = core_invert(&stack, None).map_err(err)?;
     let velocity = core_velocity(&series).map_err(err)?;
+    let vel_std = insar_core::inversion::estimate_velocity_uncertainty(&series).map_err(err)?;
     let gamma = insar_core::inversion::temporal_coherence(&stack, &series).map_err(err)?;
     Ok((
         velocity.data.into_pyarray_bound(py),
+        vel_std.into_pyarray_bound(py),
         series.data.into_pyarray_bound(py),
         gamma.into_pyarray_bound(py),
         epochs,
@@ -240,6 +267,7 @@ fn sbas_from_isce<'py>(
 fn insar_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(invert_sbas, m)?)?;
     m.add_function(wrap_pyfunction!(estimate_velocity, m)?)?;
+    m.add_function(wrap_pyfunction!(estimate_velocity_uncertainty, m)?)?;
     m.add_function(wrap_pyfunction!(amplitude_dispersion, m)?)?;
     m.add_function(wrap_pyfunction!(temporal_coherence, m)?)?;
     m.add_function(wrap_pyfunction!(sbas_from_isce, m)?)?;

@@ -167,7 +167,10 @@ Dependencia añadida: `roxmltree` (parser XML read-only) para el `.vrt`; pyo3 0.
   coherencia temporal salía ~0.1 (offsets de ISCE como residuo). El CLI/PyO3
   eligen el píxel de máxima coherencia media. No altera la paridad de velocidad
   vs MintPy (RMSE 0.0070, r=1.000000 confirmado tras el cambio). 2 tests.
-- [ ] Pendientes de los caveats: APS en épocas extremas (#2), velocidad OLS no ponderada (#3).
+- [x] **Incertidumbre de velocidad** (`inversion::estimate_velocity_uncertainty`):
+  error estándar del ajuste OLS (estilo velocityStd de MintPy). Fernandina:
+  mediana 0.83 mm/año. CLI (velocity_std.tif) + PyO3. 3 tests.
+- [ ] Pendientes de los caveats: APS en épocas extremas (#2), velocidad OLS no ponderada (#3, opcional — MintPy también usa OLS por defecto).
 
 ## Prompts para Subagentes (Fase 2)
 

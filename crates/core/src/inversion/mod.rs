@@ -311,6 +311,74 @@ pub fn estimate_velocity(series: &DisplacementSeries) -> Result<VelocityMap> {
     Ok(VelocityMap { data: out, meta: series.meta.clone() })
 }
 
+/// Incertidumbre (error estándar) de la velocidad LOS por píxel (m/año), del
+/// ajuste lineal OLS: `SE(v) = sqrt( (SSR/(n−2)) / Σ(t−t̄)² )`, con SSR la suma
+/// de residuos al cuadrado del ajuste. Requiere ≥3 épocas (n−2 grados de
+/// libertad); con menos → error. Píxeles con la serie no finita → NaN.
+pub fn estimate_velocity_uncertainty(series: &DisplacementSeries) -> Result<Array2<f32>> {
+    let n_epochs = series.n_layers();
+    let (n_rows, n_cols) = series.dims();
+
+    if series.epochs.len() != n_epochs {
+        return Err(InsarError::DimensionMismatch(format!(
+            "{} épocas declaradas vs {n_epochs} capas en la serie",
+            series.epochs.len()
+        )));
+    }
+    if n_epochs < 3 {
+        return Err(InsarError::DimensionMismatch(format!(
+            "se requieren al menos 3 épocas para la incertidumbre de velocidad ({n_epochs} recibidas)"
+        )));
+    }
+
+    let t: Vec<f64> = series
+        .epochs
+        .iter()
+        .map(|e| e.years_since(&series.epochs[0]))
+        .collect();
+    let t_mean = t.iter().sum::<f64>() / n_epochs as f64;
+    let sxx: f64 = t.iter().map(|&ti| (ti - t_mean).powi(2)).sum();
+    if sxx <= 0.0 {
+        return Err(InsarError::Inversion(
+            "todas las épocas tienen la misma fecha; el ajuste lineal es indeterminado".to_string(),
+        ));
+    }
+
+    let mut out = Array2::<f32>::from_elem((n_rows, n_cols), f32::NAN);
+    let data = series.data.view();
+    let mut row_views: Vec<_> = out.axis_iter_mut(Axis(0)).collect();
+    row_views.par_iter_mut().enumerate().for_each(|(r, out_row)| {
+        for c in 0..n_cols {
+            // d̄ y la pendiente v = Σ(t−t̄)d / Σ(t−t̄)²; aborta si hay NaN.
+            let (mut d_mean, mut sxy, mut valid) = (0.0_f64, 0.0_f64, true);
+            for e in 0..n_epochs {
+                let d = data[[e, r, c]];
+                if !d.is_finite() {
+                    valid = false;
+                    break;
+                }
+                d_mean += d as f64;
+                sxy += (t[e] - t_mean) * d as f64;
+            }
+            if !valid {
+                continue;
+            }
+            d_mean /= n_epochs as f64;
+            let v = sxy / sxx;
+            // SSR = Σ (d − d̄ − v·(t − t̄))².
+            let mut ssr = 0.0_f64;
+            for e in 0..n_epochs {
+                let resid = data[[e, r, c]] as f64 - d_mean - v * (t[e] - t_mean);
+                ssr += resid * resid;
+            }
+            let var_v = (ssr / (n_epochs - 2) as f64) / sxx;
+            out_row[c] = var_v.sqrt() as f32;
+        }
+    });
+
+    Ok(out)
+}
+
 /// Coherencia temporal (Pepe & Lanari 2006): consistencia entre las fases
 /// observadas de cada par y las reconstruidas desde la serie invertida. Rango
 /// [0, 1] (1 = ajuste perfecto). Es la métrica de calidad estándar para
@@ -606,6 +674,42 @@ mod tests {
         };
         let err = estimate_velocity(&series).unwrap_err();
         assert!(matches!(err, InsarError::DimensionMismatch(_)));
+    }
+
+    // ---------- estimate_velocity_uncertainty ----------
+
+    #[test]
+    fn incertidumbre_cero_en_ajuste_perfecto() {
+        // Serie lineal exacta → residuos 0 → SE(v) = 0.
+        let stack = synthetic_stack(2, 2);
+        let series = invert_sbas(&stack, None).unwrap();
+        let se = estimate_velocity_uncertainty(&series).unwrap();
+        for &s in se.iter() {
+            assert!(s < 1e-6, "SE = {s}");
+        }
+    }
+
+    #[test]
+    fn incertidumbre_positiva_con_residuo() {
+        // Perturbar una época rompe la linealidad → SE > 0.
+        let stack = synthetic_stack(1, 1);
+        let mut series = invert_sbas(&stack, None).unwrap();
+        series.data[[2, 0, 0]] += 0.01; // 1 cm fuera de la recta
+        let se = estimate_velocity_uncertainty(&series).unwrap();
+        assert!(se[[0, 0]] > 0.0);
+    }
+
+    #[test]
+    fn incertidumbre_menos_de_tres_epocas_es_error() {
+        let series = DisplacementSeries {
+            data: Array3::zeros((2, 2, 2)),
+            epochs: epochs_12d(2),
+            meta: meta(),
+        };
+        assert!(matches!(
+            estimate_velocity_uncertainty(&series).unwrap_err(),
+            InsarError::DimensionMismatch(_)
+        ));
     }
 
     // ---------- reference_to_pixel ----------

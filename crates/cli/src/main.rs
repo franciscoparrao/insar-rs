@@ -132,14 +132,19 @@ fn main() -> anyhow::Result<()> {
 
             let series = insar_core::inversion::invert_sbas(&stack, None)?;
             let velocity = insar_core::inversion::estimate_velocity(&series)?;
+            let vel_std = insar_core::inversion::estimate_velocity_uncertainty(&series)?;
             let gamma = insar_core::inversion::temporal_coherence(&stack, &series)?;
             std::fs::create_dir_all(&output)?;
             insar_core::io::write_velocity(&velocity, &output.join("velocity.tif"))?;
             insar_core::io::write_series(&series, &output.join("series"))?;
-            // La coherencia temporal comparte el writer Float32 (mismo meta).
-            let coh = insar_core::types::VelocityMap { data: gamma, meta: stack.meta.clone() };
-            insar_core::io::write_velocity(&coh, &output.join("temporal_coherence.tif"))?;
-            println!("escrito: {}/velocity.tif + temporal_coherence.tif + series/", output.display());
+            // Coherencia e incertidumbre comparten el writer Float32 (mismo meta).
+            let wrap = |d| insar_core::types::VelocityMap { data: d, meta: stack.meta.clone() };
+            insar_core::io::write_velocity(&wrap(gamma), &output.join("temporal_coherence.tif"))?;
+            insar_core::io::write_velocity(&wrap(vel_std), &output.join("velocity_std.tif"))?;
+            println!(
+                "escrito: {}/velocity.tif + velocity_std.tif + temporal_coherence.tif + series/",
+                output.display()
+            );
         }
     }
     Ok(())
