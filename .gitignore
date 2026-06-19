@@ -10,3 +10,5 @@
 /target/criterion
 /crates/python/*.egg-info
 __pycache__/
+/validation/maule_export
+/validation/*_check*.png

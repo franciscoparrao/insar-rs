@@ -20,5 +20,6 @@ pub mod pipeline;
 pub mod ps;
 pub mod types;
 pub mod unwrap;
+pub mod unwrap_error;
 
 pub use error::{InsarError, Result};

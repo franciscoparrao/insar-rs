@@ -170,7 +170,26 @@ Dependencia añadida: `roxmltree` (parser XML read-only) para el `.vrt`; pyo3 0.
 - [x] **Incertidumbre de velocidad** (`inversion::estimate_velocity_uncertainty`):
   error estándar del ajuste OLS (estilo velocityStd de MintPy). Fernandina:
   mediana 0.83 mm/año. CLI (velocity_std.tif) + PyO3. 3 tests.
+- [x] **Corrección de errores de desenrollado** (`unwrap_error`, Yunjun et al. 2019):
+  cierre de fase sobre la red SBAS (lazos de tripletes), estima el entero de
+  corrección por par y píxel (pinv L2 redondeada) y aplica φ−=2π·U. Maneja los
+  saltos 2π entre componentes conexas de productos ISCE/GUNW sin heurística
+  espacial. 6 tests. Integrado en el flujo ARIA.
 - [ ] Pendientes de los caveats: APS en épocas extremas (#2), velocidad OLS no ponderada (#3, opcional — MintPy también usa OLS por defecto).
+
+### Caso chileno (en curso): Laguna del Maule vía ARIA S1-GUNW (2026-06-19)
+- Pipeline ARIA completo: descarga autenticada (ASF/Earthdata), `aria_to_stack.py`
+  (recorte + máscara connectedComponents + export), `examples/validate_maule.rs`
+  (corrección de unwrap errors → referencia → inversión → velocidad + coherencia).
+- 43 épocas / 80 pares (track 83 desc, 2017-05..2018-10), red conexa, inversión 1.2s.
+- `unwrap_error` corrigió 305k píxeles; coherencia temporal 0.44 → 0.75.
+- **Hallazgo (físico, no del motor)**: el centro deformante de Maule está
+  DECORRELACIONADO en este subset (inflación rápida + nieve andina estacional →
+  componente 0 en la mayoría de pares). Solo sobrevive coherencia en el terreno
+  bajo circundante. Maule es de los casos InSAR más difíciles justo por ser el
+  más rápido. Recomendación reforzada: caso chileno de ALTA coherencia (norte
+  árido / Atacama: subsidencia minera o de salar) recuperaría limpio.
+- LiCSAR (formato ideal) sigue inalcanzable desde este entorno (JASMIN bloqueado).
 
 ## Prompts para Subagentes (Fase 2)
 

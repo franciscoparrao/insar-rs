@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>insar·rs — motor InSAR en Rust</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400;9..144,500;9..144,600&family=Spline+Sans:wght@400;500;600&family=Spline+Sans+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:oklch(0.972 0.008 75);
+  --paper-2:oklch(0.945 0.012 75);
+  --ink:oklch(0.28 0.022 250);
+  --ink-soft:oklch(0.46 0.02 250);
+  --ink-faint:oklch(0.62 0.015 250);
+  --warm:oklch(0.56 0.16 38);
+  --cool:oklch(0.5 0.085 220);
+  --line:oklch(0.28 0.02 250 / 0.16);
+  --line-soft:oklch(0.28 0.02 250 / 0.08);
+}
+*{box-sizing:border-box;margin:0}
+html{-webkit-font-smoothing:antialiased}
+body{
+  background:var(--paper);color:var(--ink);
+  font-family:"Spline Sans",sans-serif;font-weight:400;
+  font-size:clamp(1rem,0.55vw + 0.9rem,1.12rem);line-height:1.62;
+  text-rendering:optimizeLegibility;
+}
+.wrap{max-width:1180px;margin:0 auto;padding:0 clamp(1.25rem,5vw,4rem)}
+.col{max-width:46rem}
+a{color:var(--warm);text-decoration:none}
+strong{font-weight:600}
+em{font-style:italic;color:var(--ink-soft)}
+
+/* ---- type ---- */
+.display{font-family:"Fraunces",serif;font-weight:400;line-height:0.95;letter-spacing:-0.02em}
+.mono{font-family:"Spline Sans Mono",monospace}
+.kicker{font-family:"Spline Sans Mono",monospace;font-size:0.74rem;letter-spacing:0.22em;
+  text-transform:uppercase;color:var(--ink-faint)}
+h2{font-family:"Fraunces",serif;font-weight:400;font-size:clamp(1.9rem,3.6vw,3rem);
+  line-height:1.02;letter-spacing:-0.02em;margin:0.4em 0 0.5em}
+h3{font-family:"Fraunces",serif;font-weight:500;font-size:1.32rem;letter-spacing:-0.01em;margin-bottom:0.3em}
+p{margin:0 0 1.05em;color:var(--ink-soft)}
+p.lead{font-size:1.18rem;color:var(--ink)}
+
+/* ---- masthead ---- */
+.mast{padding:clamp(3rem,9vh,7rem) 0 clamp(2rem,5vh,3.5rem)}
+.nameplate{font-size:clamp(3.6rem,15vw,11rem);font-weight:300}
+.nameplate b{font-weight:500}
+.nameplate .dot{color:var(--warm)}
+.thesis{font-family:"Fraunces",serif;font-weight:300;font-size:clamp(1.4rem,3.2vw,2.5rem);
+  line-height:1.18;letter-spacing:-0.015em;max-width:24ch;margin:0.7em 0 0;color:var(--ink)}
+.thesis u{text-decoration:none;color:var(--warm)}
+.specline{margin-top:1.8em;display:flex;flex-wrap:wrap;gap:0.5em 1.4em}
+.specline span{font-family:"Spline Sans Mono",monospace;font-size:0.78rem;color:var(--ink-faint)}
+.specline span::before{content:"›";color:var(--warm);margin-right:0.55em}
+
+/* ---- fringe divider (interferogram motif) ---- */
+.fringe{height:9px;border-radius:9px;margin:clamp(2.5rem,6vh,4.5rem) 0;
+  background:repeating-linear-gradient(90deg,
+    oklch(0.55 0.18 25),oklch(0.7 0.16 90),oklch(0.6 0.13 150),
+    oklch(0.55 0.13 230),oklch(0.5 0.18 300),oklch(0.55 0.18 25) 64px);
+  opacity:0.85}
+.fringe.thin{height:3px;opacity:0.6;margin:2rem 0}
+
+/* ---- sections ---- */
+section{padding:clamp(2rem,5vh,3.5rem) 0}
+.shead{display:flex;align-items:baseline;gap:1.1rem;margin-bottom:1.4rem}
+.snum{font-family:"Spline Sans Mono",monospace;font-size:0.82rem;color:var(--warm);
+  letter-spacing:0.05em;padding-top:0.2em}
+
+/* ---- stat strip ---- */
+.stats{display:flex;flex-wrap:wrap;gap:clamp(1.4rem,4vw,3.4rem);align-items:flex-end;
+  border-top:1px solid var(--line);padding-top:1.6rem;margin-top:0.6rem}
+.stat .n{font-family:"Fraunces",serif;font-weight:400;font-size:clamp(2.1rem,5vw,3.4rem);
+  line-height:0.9;letter-spacing:-0.02em;display:block}
+.stat .n small{font-size:0.42em;color:var(--ink-faint);font-weight:400}
+.stat .l{font-family:"Spline Sans Mono",monospace;font-size:0.72rem;color:var(--ink-faint);
+  text-transform:uppercase;letter-spacing:0.08em;margin-top:0.6em;display:block;max-width:18ch}
+.stat.accent .n{color:var(--warm)}
+
+/* ---- pipeline ---- */
+.flow{display:flex;flex-wrap:wrap;align-items:stretch;gap:0.5rem;margin:1.4rem 0 0.5rem}
+.step{flex:1 1 8rem;border:1px solid var(--line);border-radius:3px;padding:0.85rem 0.95rem;background:var(--paper-2)}
+.step .k{font-family:"Spline Sans Mono",monospace;font-size:0.7rem;color:var(--warm);display:block;margin-bottom:0.3em}
+.step .t{font-size:0.92rem;line-height:1.3;color:var(--ink)}
+.flow .arr{align-self:center;color:var(--ink-faint);font-size:1.1rem}
+@media(max-width:680px){.flow .arr{display:none}}
+
+/* ---- figures ---- */
+figure{margin:1.8rem 0}
+.figgrid{display:grid;grid-template-columns:1fr 1fr;gap:1.4rem}
+@media(max-width:760px){.figgrid{grid-template-columns:1fr}}
+figure img,figure svg{width:100%;height:auto;display:block}
+.fig-panel{background:var(--paper-2);border:1px solid var(--line-soft);border-radius:4px;padding:0.6rem}
+figcaption{font-family:"Spline Sans Mono",monospace;font-size:0.74rem;color:var(--ink-faint);
+  margin-top:0.7em;line-height:1.45}
+figcaption b{color:var(--ink-soft);font-weight:500}
+
+/* ---- code ---- */
+.code{background:oklch(0.24 0.02 250);color:oklch(0.9 0.01 250);border-radius:5px;
+  font-family:"Spline Sans Mono",monospace;font-size:0.82rem;line-height:1.7;
+  padding:1.1rem 1.2rem;overflow-x:auto;margin:0.4rem 0 1.2rem}
+.code .tab{display:block;font-size:0.68rem;letter-spacing:0.12em;text-transform:uppercase;
+  color:oklch(0.62 0.04 250);margin-bottom:0.7em}
+.code .c{color:oklch(0.6 0.03 250)}
+.code .w{color:oklch(0.78 0.12 60)}
+.code .s{color:oklch(0.74 0.1 150)}
+
+/* ---- pull quote ---- */
+.pull{font-family:"Fraunces",serif;font-weight:300;font-size:clamp(1.4rem,3vw,2.1rem);
+  line-height:1.2;letter-spacing:-0.01em;color:var(--ink);max-width:30ch;
+  border-left:2px solid var(--warm);padding-left:1.1rem;margin:1.8rem 0}
+
+/* ---- two-col prose ---- */
+.duo{display:grid;grid-template-columns:1fr 1fr;gap:clamp(1.5rem,4vw,3rem)}
+@media(max-width:760px){.duo{grid-template-columns:1fr}}
+
+/* ---- colophon ---- */
+footer{border-top:1px solid var(--line);margin-top:3rem;padding:2.4rem 0 4rem}
+footer .mono{font-size:0.78rem;color:var(--ink-faint);line-height:1.9}
+.tag{display:inline-block;font-family:"Spline Sans Mono",monospace;font-size:0.72rem;
+  border:1px solid var(--line);border-radius:999px;padding:0.2em 0.8em;margin:0.2em 0.3em 0.2em 0;color:var(--ink-soft)}
+
+/* ---- reveal ---- */
+.js .reveal{opacity:0;transform:translateY(14px);transition:opacity .7s cubic-bezier(.16,1,.3,1),transform .7s cubic-bezier(.16,1,.3,1)}
+.reveal.in{opacity:1;transform:none}
+@media(prefers-reduced-motion:reduce){.js .reveal{opacity:1;transform:none;transition:none}}
+</style>
+</head>
+<body>
+<script>document.documentElement.classList.add('js')</script>
+<div class="wrap">
+
+  <!-- MASTHEAD -->
+  <header class="mast">
+    <div class="kicker">Observatorio computacional · deformación del terreno · 2026</div>
+    <div class="nameplate display reveal">insar<span class="dot">·</span><b>rs</b></div>
+    <p class="thesis reveal">Un motor nativo en Rust para medir cómo se <u>mueve el suelo</u> desde el radar de Sentinel-1.</p>
+    <div class="specline reveal">
+      <span>SBAS + Persistent Scatterers</span>
+      <span>lee ISCE sin GDAL</span>
+      <span>validado contra MintPy</span>
+      <span>CLI + Python</span>
+    </div>
+  </header>
+
+  <div class="fringe reveal"></div>
+
+  <!-- KEY STATS -->
+  <div class="stats reveal">
+    <div class="stat accent"><span class="n">1.000000</span><span class="l">correlación de velocidad vs MintPy</span></div>
+    <div class="stat"><span class="n">0.0070<small> mm/año</small></span><span class="l">RMSE de velocidad vs MintPy</span></div>
+    <div class="stat"><span class="n">~30×<small></small></span><span class="l">más rápido en la inversión</span></div>
+    <div class="stat"><span class="n">84<small> tests</small></span><span class="l">verdes · clippy en cero</span></div>
+  </div>
+
+  <!-- 01 EL VACÍO -->
+  <section>
+    <div class="shead"><span class="snum">01</span><div><div class="kicker">el vacío que llena</div><h2 class="display">Todo el campo vive en Python y MATLAB</h2></div></div>
+    <div class="col">
+      <p class="lead">ISCE, StaMPS, MintPy, EZ-InSAR: las herramientas de referencia para series temporales InSAR son potentes, pero pesadas de montar y lentas. No existía un motor nativo en Rust.</p>
+      <p>Chile concentra casos urgentes con datos Sentinel-1 gratuitos: subsidencia por minería y acuíferos, inflación volcánica, deslizamientos lentos. Medir milímetros de deformación al año requiere invertir cientos de interferogramas sobre cientos de miles de píxeles — exactamente donde un motor compilado, paralelo y sin dependencias frágiles marca la diferencia.</p>
+      <p class="pull">insar·rs hace ese cálculo en segundos, con paridad numérica frente a la herramienta de referencia.</p>
+    </div>
+  </section>
+
+  <!-- 02 ARQUITECTURA -->
+  <section>
+    <div class="shead"><span class="snum">02</span><div><div class="kicker">arquitectura</div><h2 class="display">Una tubería SBAS, de extremo a extremo</h2></div></div>
+    <div class="col"><p>Cada etapa es un módulo independiente del crate <span class="mono">insar-core</span>. La entrada son interferogramas ya desenrollados de ISCE; la salida, mapas de velocidad y series temporales georreferenciados con su capa de calidad.</p></div>
+    <div class="flow reveal">
+      <div class="step"><span class="k">io::isce</span><span class="t">Lee los <b>.unw</b> (sin GDAL)</span></div>
+      <span class="arr">→</span>
+      <div class="step"><span class="k">ps · network</span><span class="t">PS + red SBAS conexa</span></div>
+      <span class="arr">→</span>
+      <div class="step"><span class="k">inversion</span><span class="t">LSQ por SVD, NaN-por-par</span></div>
+      <span class="arr">→</span>
+      <div class="step"><span class="k">atmosphere</span><span class="t">Corrección atmosférica</span></div>
+      <span class="arr">→</span>
+      <div class="step"><span class="k">velocidad + γ</span><span class="t">Velocidad, σ y coherencia</span></div>
+    </div>
+    <div class="col"><p style="margin-top:1.4rem">La inversión cachea la pseudoinversa <em>por patrón de máscara</em>: cuando faltan pares en un píxel (decorrelación), resuelve con su subred válida sin pagar una SVD por píxel. Un stress-test de 20% de datos faltantes sobre 270 000 píxeles cayó de <b style="color:var(--ink)">545 s a 1.34 s</b>.</p></div>
+  </section>
+
+  <div class="fringe thin reveal"></div>
+
+  <!-- 03 VALIDACIÓN -->
+  <section>
+    <div class="shead"><span class="snum">03</span><div><div class="kicker">validación</div><h2 class="display">Indistinguible de MintPy</h2></div></div>
+    <div class="duo">
+      <div>
+        <p class="lead">Alimentando a ambos las <em>mismas</em> fases desenrolladas del dataset público de Fernandina (98 épocas, 288 interferogramas) e invirtiendo sin ponderar, insar·rs reproduce a MintPy al nivel del redondeo de punto flotante.</p>
+        <p>Serie temporal: RMSE <b style="color:var(--ink)">0.0029 mm</b>. Velocidad: RMSE <b style="color:var(--ink)">0.0070 mm/año</b>, correlación de Pearson <b style="color:var(--ink)">1.000000</b>, pendiente 0.9995. La nube de puntos es la diagonal identidad.</p>
+      </div>
+      <figure class="reveal">
+        <div class="fig-panel">__PARITY__</div>
+        <figcaption><b>Velocidad LOS, insar·rs vs MintPy.</b> Densidad logarítmica sobre 270 000 píxeles; la recta es la identidad 1:1.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- 04 RENDIMIENTO -->
+  <section>
+    <div class="shead"><span class="snum">04</span><div><div class="kicker">rendimiento</div><h2 class="display">Segundos, no minutos</h2></div></div>
+    <div class="stats reveal" style="border-top:none;padding-top:0">
+      <div class="stat accent"><span class="n">1.8<small> s</small></span><span class="l">inversión + velocidad, 270k píxeles</span></div>
+      <div class="stat"><span class="n">55.7<small> s</small></span><span class="l">la misma etapa en MintPy</span></div>
+      <div class="stat"><span class="n">3.3<small> s</small></span><span class="l">leer 288 interferogramas ISCE</span></div>
+    </div>
+    <div class="col"><p style="margin-top:1.6rem">La SVD de la matriz de diseño se factoriza una sola vez y se reutiliza en toda la grilla; el resto es álgebra densa paralelizada con Rayon. Sin intérprete, sin copias innecesarias, sin GDAL.</p></div>
+  </section>
+
+  <div class="fringe reveal"></div>
+
+  <!-- 05 APLICACIÓN -->
+  <section>
+    <div class="shead"><span class="snum">05</span><div><div class="kicker">aplicación práctica · Galápagos</div><h2 class="display">El volcán Fernandina respirando</h2></div></div>
+    <div class="col">
+      <p class="lead">Sobre un stack real de Sentinel-1 (dic 2014 – jun 2018), insar·rs reconstruye la deformación de la caldera de Fernandina — uno de los volcanes más activos del planeta — y captura su erupción de junio de 2018.</p>
+    </div>
+    <figure class="reveal">
+      <div class="figgrid">
+        <div><div class="fig-panel"><img src="__VELOCITY__" alt="Mapa de velocidad LOS"></div></div>
+        <div><div class="fig-panel"><img src="__COHERENCE__" alt="Coherencia temporal"></div></div>
+      </div>
+      <figcaption><b>Izquierda:</b> velocidad media en la línea de vista (mm/año); el núcleo rojo intenso es la caldera deformándose. <b>Derecha:</b> coherencia temporal γ — la métrica de calidad que enmascara los píxeles poco fiables (mediana __COH_MED__).</figcaption>
+    </figure>
+    <figure class="reveal">
+      <div class="fig-panel" style="padding:0.9rem 0.6rem">__TIMESERIES__</div>
+      <figcaption><b>Serie temporal del píxel de máxima deformación</b> (98 adquisiciones), relativa al píxel de referencia. La pendiente recupera una velocidad de unos <b>__PEAK_V__ mm/año</b>.</figcaption>
+    </figure>
+    <div class="col">
+      <p class="pull">Cerca de __PEAK_DISP__ cm de desplazamiento acumulado, medidos desde el espacio, con datos gratuitos, en un cálculo de segundos.</p>
+      <p>Cada producto sale georreferenciado y acompañado de su incertidumbre y su coherencia temporal — listo para superponer en un SIG o alimentar un modelo de peligro. El mismo flujo aplica a subsidencia minera o deslizamientos: cambia el stack de entrada, no el motor.</p>
+    </div>
+  </section>
+
+  <!-- 06 CÓMO SE USA -->
+  <section>
+    <div class="shead"><span class="snum">06</span><div><div class="kicker">cómo se usa</div><h2 class="display">Desde la terminal o desde Python</h2></div></div>
+    <div class="duo">
+      <div>
+        <h3>CLI</h3>
+        <div class="code"><span class="tab">shell</span><span class="c"># de interferogramas ISCE a velocidad + calidad</span><br>insar isce <span class="s">merged/interferograms</span> <span class="s">salida/</span> \<br>&nbsp;&nbsp;<span class="w">--baselines</span> baselines/<br><br><span class="c"># → velocity.tif · velocity_std.tif</span><br><span class="c"># → temporal_coherence.tif · series/</span></div>
+      </div>
+      <div>
+        <h3>Python</h3>
+        <div class="code"><span class="tab">python</span><span class="w">import</span> insar_rs<br>vel, std, serie, coh, fechas = \<br>&nbsp;&nbsp;insar_rs.<span class="s">sbas_from_isce</span>(<br>&nbsp;&nbsp;&nbsp;&nbsp;<span class="s">"merged/interferograms"</span>,<br>&nbsp;&nbsp;&nbsp;&nbsp;baselines_dir=<span class="s">"baselines"</span>)<br><span class="c"># arrays numpy, motor Rust por debajo</span></div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="kicker" style="margin-bottom:1rem">colofón</div>
+    <p class="mono">Rust edition 2024 · crates: insar-core · insar-cli · insar-python (PyO3) · I/O GeoTIFF vía SurtGIS, sin GDAL · validado contra MintPy 1.6 sobre FernandinaSenDT128.</p>
+    <div style="margin-top:1.2rem">
+      <span class="tag">SBAS</span><span class="tag">Persistent Scatterers</span><span class="tag">lectura ISCE nativa</span>
+      <span class="tag">coherencia temporal</span><span class="tag">incertidumbre de velocidad</span><span class="tag">Rayon</span>
+      <span class="tag">PyO3 + numpy</span><span class="tag">84 tests</span>
+    </div>
+    <p class="mono" style="margin-top:1.6rem;color:var(--ink-faint)">Earth Science Informatics · Computers &amp; Geosciences — venue objetivo.</p>
+  </footer>
+
+</div>
+<script>
+const io=new IntersectionObserver((es)=>{for(const e of es){if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target)}}},{threshold:0.12,rootMargin:"0px 0px -8% 0px"});
+document.querySelectorAll('.reveal').forEach((el,i)=>{el.style.transitionDelay=(Math.min(i,6)*60)+'ms';io.observe(el)});
+</script>
+</body>
+</html>
