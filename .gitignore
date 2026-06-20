@@ -12,3 +12,5 @@
 __pycache__/
 /validation/maule_export
 /validation/*_check*.png
+/validation/atacama_export
+/data/atacama_sel.json
