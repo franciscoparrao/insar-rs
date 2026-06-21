@@ -15,3 +15,5 @@ __pycache__/
 /validation/atacama_export
 /data/atacama_sel.json
 /data/dem
+/validation/maule_summer_export
+/data/maule_summer_sel.json

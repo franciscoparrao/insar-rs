@@ -11,9 +11,10 @@ lon = g["lon0"] + np.arange(nc) * g["dlon"]; lat = g["lat0"] + np.arange(nr) * g
 LON, LAT = np.meshgrid(lon, lat); dem = np.full((nr, nc), np.nan, np.float32)
 for path in sys.argv[2:]:
     # nombre ..._S24_00_W068_00_DEM.tif -> esquina SW (lat -24, lon -68)
-    p = path.split("Copernicus_DSM_COG_10_")[1]
-    slat = -int(p[1:3]) if p[0] == "S" else int(p[1:3])
-    wlon = -int(p[7:10]) if p[6] == "W" else int(p[7:10])
+    parts = path.split("Copernicus_DSM_COG_10_")[1].split("_")
+    la, lo = parts[0], parts[2]  # "S24", "W068"
+    slat = -int(la[1:]) if la[0] == "S" else int(la[1:])
+    wlon = -int(lo[1:]) if lo[0] == "W" else int(lo[1:])
     a = tifffile.imread(path).astype(np.float32); H, W = a.shape
     sel = (LON >= wlon) & (LON < wlon + 1) & (LAT >= slat) & (LAT < slat + 1)
     col = np.clip(((LON - wlon) * W).astype(int), 0, W - 1)

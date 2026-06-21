@@ -9,8 +9,13 @@
 
 | Caso | Dato | Coherencia temporal | Resultado |
 |------|------|---------------------|-----------|
-| **Laguna del Maule** (volcán) | track 83 desc, 80 ifgs, 2017–2018 | 0.75 (centro decorrelacionado) | Centro deformante sin señal recuperable |
-| **Salar de Atacama** (subsidencia salmuera) | track 156 desc, 67 ifgs, 2019–2020 | **0.999**, cobertura 100% | Pipeline limpio end-to-end; señal de deformación de varios cm/año |
+| **Laguna del Maule** (volcán) — red **solo-verano** | track 83 desc, 100 ifgs, 2016–2020 | **0.92**, cobertura 52% | **Inflación −21.3 cm/año LOS recuperada** (lit. 18–27 cm/año) |
+| **Salar de Atacama** (subsidencia salmuera) | track 156 desc, 67 ifgs, 2019–2020 | **0.999**, cobertura 100% | Pipeline limpio; tras corrección, residuo 0.30 cm/año |
+
+> Nota histórica: un primer intento con red de estaciones MEZCLADAS (2017–2018,
+> pares de 12–36 días) falló — la nieve invernal andina decorrelacionaba el
+> centro de Maule (componente 0 → enmascarado → red local desconectada). El
+> diagnóstico llevó a la red estacional; ver más abajo.
 
 ## Capacidad nueva del motor: `unwrap_error`
 
@@ -21,15 +26,33 @@ Yunjun et al. 2019): usa los lazos de tripletes de la red SBAS para estimar el
 entero de corrección por par y píxel. En Maule corrigió 305 k píxeles (coherencia
 0.44 → 0.75); en Atacama, 706 k (toda la escena), con coherencia final 0.999.
 
-## Laguna del Maule — el límite físico
+## Laguna del Maule — recuperada con red estacional
 
-Inflación récord (18–27 cm/año publicado). insar-rs ingirió 43 épocas / 80 pares
-e invirtió en 1.2 s, pero **el centro deformante quedó decorrelacionado**: la
-inflación rápida (alta tasa de franjas) más la nieve estacional andina destruyen
-la coherencia sobre los pares de 12–36 días, y el desenrollado marca el centro
-como componente 0 (no fiable). Solo sobrevive coherencia en el terreno bajo
-circundante. **No es una falla del motor** — es una limitación del dato de
-entrada; Maule es de los casos InSAR más difíciles justo por ser el más rápido.
+Inflación récord (18–27 cm/año publicado), uno de los volcanes de deformación
+más rápida del planeta. **Primer intento (fallido):** red de 80 pares de 12–36
+días sobre 2017–2018 mezclando estaciones → el centro quedó decorrelacionado
+(coherencia 0.44, centro en componente 0 por la nieve invernal) y sin señal.
+
+**Diagnóstico:** una prueba barata mostró que un par de 12 días de *pleno verano*
+(enero 2018) tiene el centro de Maule a **coherencia 0.96, 100 % fiable**. El
+problema no era el motor ni la velocidad de deformación, sino **mezclar
+estaciones**: las parejas de invierno (nieve) decorrelaban el centro y, al
+enmascarar el componente 0, desconectaban su red SBAS local.
+
+**Solución (red estacional):** 100 interferogramas **solo de verano austral**
+(dic–mar) — pares cortos de 12–24 días *dentro* de cada verano + pares anuales
+(~360–384 días) que puentean veranos consecutivos (misma estación → coherentes),
+abarcando 2016–2020. Con la cadena completa (`unwrap_error` → `troposphere` →
+`deramp`):
+
+- coherencia temporal **0.92**, cobertura coherente **52 %** (vs 4 %);
+- **inflación de −21.3 cm/año LOS** en el pico, **centrado exactamente en
+  Laguna del Maule** (−70.51, −36.06), con serie temporal lineal limpísima sobre
+  3.3 años — consistente con los 18–27 cm/año (vertical) publicados.
+
+Lección reutilizable: en terreno nival/vegetado, **redes estacionales +
+puentes anuales** mantienen la coherencia donde las redes de baseline corto
+pero multi-estación fallan.
 
 ## Salar de Atacama — coherencia de clase mundial
 
