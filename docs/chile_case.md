@@ -63,11 +63,32 @@ N-S) tras deramp deja **~5 cm/año de señal localizada residual** — deformaci
 local separada del gradiente orbital/atmosférico, consistente con subsidencia.
 La interpretación geofísica fina aún pide los pasos de abajo.
 
-## Próximos refinamientos sugeridos (orden de valor)
+## Corrección troposférica topo-correlacionada (`troposphere`)
 
-1. ~~Deramp nativo~~ ✓ hecho (`postprocess::remove_ramp` / `deramp_series`).
-2. **Corrección troposférica** (ERA5/GACOS) — clave para señales lentas (mm-cm/año).
+Añadida al motor (`troposphere::correct_topo_correlated` / `correct_topo_series`,
+Doin 2009 / Bekaert 2015): ajusta la relación fase-elevación y remueve la
+componente dependiente de la altura. Sobre Atacama, con un DEM Copernicus GLO-30
+remuestreado a la grilla (`aria_add_dem.py`), reduce drásticamente el scatter de
+velocidad sobre píxeles coherentes:
+
+| Corrección | σ velocidad (γ>0.7) | Reducción |
+|------------|---------------------|-----------|
+| Ninguna | 1.27 cm/año | — |
+| Troposférica (topo) | **0.56 cm/año** | −56 % |
+| Troposférica + deramp | 0.30 cm/año | −76 % |
+
+La corrección topo-correlacionada sola elimina más de la mitad del scatter:
+confirma que la "deformación" cruda de Atacama era mayormente atmósfera
+correlacionada con la elevación (Andes altos) + rampa orbital. El residuo final
+(0.30 cm/año) está al nivel de ruido para 7 meses — la subsidencia genuina de
+litio (~1–2 cm/año) requiere serie más larga para emerger limpiamente.
+
+## Próximos refinamientos sugeridos
+
+1. ~~Deramp nativo~~ ✓ (`postprocess::remove_ramp`).
+2. ~~Corrección troposférica~~ ✓ (`troposphere::correct_topo_correlated`, topo-correlacionada).
 3. Serie temporal más larga (≥2 años) y combinación ascendente+descendente.
+4. (Opcional) Corrección troposférica por modelo meteorológico (ERA5/GACOS) cuando las capas GUNW no sean placeholders.
 
 ## Reproducir (Atacama)
 

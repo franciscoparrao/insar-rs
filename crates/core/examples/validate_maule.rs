@@ -93,6 +93,24 @@ fn main() {
     // Coherencia temporal sobre la serie SIN deramp (mide el ajuste de la
     // inversión; el deramp es post-proceso y la invalidaría).
     let tcoh = temporal_coherence(&stack, &series).unwrap();
+
+    // Máscara de coherencia para los ajustes de post-proceso.
+    let mut mask = ndarray::Array2::from_elem((nr, nc), false);
+    for r in 0..nr {
+        for c in 0..nc {
+            mask[[r, c]] = tcoh[[r, c]].is_finite() && tcoh[[r, c]] > 0.7;
+        }
+    }
+
+    // Corrección troposférica topo-correlacionada (si TROPO=1 y hay dem.f32).
+    if std::env::var("TROPO").is_ok() {
+        let dem_path = dir.join("dem.f32");
+        let dem_vec = read_f32(&dem_path, nr * nc);
+        let dem = Array3::from_shape_vec((1, nr, nc), dem_vec).unwrap();
+        let dem = dem.index_axis(ndarray::Axis(0), 0).to_owned();
+        insar_core::troposphere::correct_topo_series(&mut series, &dem, Some(&mask), 1, true).unwrap();
+        println!("corrección troposférica topo-correlacionada aplicada");
+    }
     // Deramp por época sobre píxeles coherentes (quita atmósfera/órbita de gran
     // escala). Activable con DERAMP=1.
     if std::env::var("DERAMP").is_ok() {

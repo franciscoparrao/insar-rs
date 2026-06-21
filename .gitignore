@@ -14,3 +14,4 @@ __pycache__/
 /validation/*_check*.png
 /validation/atacama_export
 /data/atacama_sel.json
+/data/dem
