@@ -17,6 +17,7 @@ pub mod inversion;
 pub mod io;
 pub mod network;
 pub mod pipeline;
+pub mod postprocess;
 pub mod ps;
 pub mod types;
 pub mod unwrap;

@@ -54,9 +54,18 @@ en cobertura y consistencia; la interpretación geofísica fina pide los
 refinamientos habituales. El contraste Maule (decorrelacionado) vs Atacama
 (prístino) es, en sí, una buena ilustración de la física de coherencia InSAR.
 
+## Deramp nativo (`postprocess::remove_ramp`)
+
+Añadido al motor: ajuste planar/cuadrático por mínimos cuadrados sobre píxeles
+coherentes (con máscara opcional) y resta; `deramp_series` lo aplica por época.
+Sobre Atacama, la velocidad cruda (−6 cm/año, dominada por la rampa de −3 cm/año
+N-S) tras deramp deja **~5 cm/año de señal localizada residual** — deformación
+local separada del gradiente orbital/atmosférico, consistente con subsidencia.
+La interpretación geofísica fina aún pide los pasos de abajo.
+
 ## Próximos refinamientos sugeridos (orden de valor)
 
-1. **Deramp nativo** (`remove_ramp`) — ajuste planar/cuadrático, estándar y barato.
+1. ~~Deramp nativo~~ ✓ hecho (`postprocess::remove_ramp` / `deramp_series`).
 2. **Corrección troposférica** (ERA5/GACOS) — clave para señales lentas (mm-cm/año).
 3. Serie temporal más larga (≥2 años) y combinación ascendente+descendente.
 

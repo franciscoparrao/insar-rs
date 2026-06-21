@@ -89,9 +89,31 @@ fn main() {
     reference_to_pixel(&mut stack, best.0, best.1).unwrap();
 
     let t = std::time::Instant::now();
-    let series = invert_sbas(&stack, None).unwrap();
-    let vel = estimate_velocity(&series).unwrap();
+    let mut series = invert_sbas(&stack, None).unwrap();
+    // Coherencia temporal sobre la serie SIN deramp (mide el ajuste de la
+    // inversión; el deramp es post-proceso y la invalidaría).
     let tcoh = temporal_coherence(&stack, &series).unwrap();
+    // Deramp por época sobre píxeles coherentes (quita atmósfera/órbita de gran
+    // escala). Activable con DERAMP=1.
+    if std::env::var("DERAMP").is_ok() {
+        // máscara provisional: coherencia media por par > 0.5
+        let mut mask = ndarray::Array2::from_elem((nr, nc), false);
+        for r in 0..nr {
+            for c in 0..nc {
+                let (mut s, mut k) = (0.0f64, 0u32);
+                for p in 0..np {
+                    let v = coh[[p, r, c]];
+                    if v.is_finite() { s += v as f64; k += 1; }
+                }
+                mask[[r, c]] = k > 0 && (s / k as f64) > 0.7;
+            }
+        }
+        insar_core::postprocess::deramp_series(
+            &mut series, insar_core::postprocess::RampKind::Linear, Some(&mask),
+        ).unwrap();
+        println!("deramp por época aplicado (máscara coherencia>0.7)");
+    }
+    let vel = estimate_velocity(&series).unwrap();
     println!("inversión + velocidad + coherencia: {:.2}s", t.elapsed().as_secs_f64());
 
     // Velocidad de deformación: extremo entre píxeles coherentes (cm/año).

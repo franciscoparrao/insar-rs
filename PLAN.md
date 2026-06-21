@@ -190,6 +190,11 @@ Dependencia añadida: `roxmltree` (parser XML read-only) para el `.vrt`; pyo3 0.
   más rápido. Recomendación reforzada: caso chileno de ALTA coherencia (norte
   árido / Atacama: subsidencia minera o de salar) recuperaría limpio.
 - LiCSAR (formato ideal) sigue inalcanzable desde este entorno (JASMIN bloqueado).
+- **Salar de Atacama** (track 156 desc, 67 ifgs 2019-2020): coherencia 0.999,
+  cobertura 100%, pipeline limpio. Velocidad cruda −6 cm/año dominada por rampa;
+  con deramp queda ~5 cm/año de señal localizada. Confirma la física de coherencia.
+- [x] **Deramp nativo** (`postprocess::remove_ramp` / `deramp_series`): ajuste
+  planar/cuadrático LSQ con máscara, resta in situ. 4 tests. Resuelve el caveat #2-rampa.
 
 ## Prompts para Subagentes (Fase 2)
 
