@@ -19,6 +19,7 @@ pub mod network;
 pub mod pipeline;
 pub mod postprocess;
 pub mod ps;
+pub mod troposphere;
 pub mod types;
 pub mod unwrap;
 pub mod unwrap_error;
