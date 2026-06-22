@@ -26,6 +26,8 @@ roxmltree.workspace = true
 criterion = { version = "0.5", features = ["html_reports"] }
 # Relleno de huecos por kriging (acoplamiento suelto: solo para ejemplos).
 geostat-core = { path = "../../../geostat-rs/crates/geostat-core" }
+# ML nativo (clasificación/regresión + CV espacial + conformal) para ejemplos.
+smelt-ml = { path = "../../../smelt" }
 
 [[bench]]
 name = "sbas"
