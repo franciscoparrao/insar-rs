@@ -118,6 +118,22 @@ con el bullseye de inflación intacto y un mapa de σ que marca alta incertidumb
 donde se interpoló lejos de datos. La salida (campo continuo + capa de
 incertidumbre) es la entrada natural del módulo `features` / Smelt.
 
+## Regression kriging (insar-rs + Smelt + geostat-rs)
+
+El método estándar-oro de predicción espacial, uniendo los tres motores
+(`regression_kriging.rs`): la tendencia la modela un RandomForest de **Smelt**
+sobre covariables de terreno (elevación + pendiente del DEM, disponibles en
+todos los píxeles), y los residuos se krigean con **geostat-rs**; la predicción
+es `tendencia(terreno) + residuo kriged` con incertidumbre. Sobre Maule rellena
+247 k huecos en ~4 s.
+
+**Hallazgo honesto:** la skill *out-of-sample* del terreno es baja (R² held-out
+≈ 0.12 — el in-sample 0.86 del RF es sobreajuste), porque la inflación de Maule
+es volcánica, no la manda el terreno. Ahí RK ≈ kriging ordinario, que es el
+comportamiento correcto. RK aporta cuando la covariable **sí** explica la
+deformación (deslizamientos ↔ pendiente, subsidencia ↔ litología): el pipeline
+está listo para esos casos.
+
 ## Próximos refinamientos sugeridos
 
 1. ~~Deramp nativo~~ ✓ (`postprocess::remove_ramp`).
