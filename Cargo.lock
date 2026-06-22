@@ -403,6 +403,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "geostat-core"
+version = "0.6.0"
+dependencies = [
+ "ndarray",
+ "rayon",
+ "serde",
+ "thiserror",
+]
+
+[[package]]
 name = "half"
 version = "2.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -523,6 +533,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "criterion",
+ "geostat-core",
  "nalgebra",
  "ndarray",
  "num-complex",

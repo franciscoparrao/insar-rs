@@ -106,6 +106,18 @@ correlacionada con la elevación (Andes altos) + rampa orbital. El residuo final
 (0.30 cm/año) está al nivel de ruido para 7 meses — la subsidencia genuina de
 litio (~1–2 cm/año) requiere serie más larga para emerger limpiamente.
 
+## Relleno de huecos por kriging (enganche con geostat-rs)
+
+Donde la coherencia cae, el campo de velocidad queda con huecos (NaN). El
+motor hermano **geostat-rs** (mismo `ndarray 0.16`) los rellena por kriging
+ordinario: los píxeles coherentes condicionan un variograma ajustado
+automáticamente, y el kriging estima la velocidad en los huecos con su
+**varianza** como incertidumbre. Ejemplo `gapfill_kriging.rs` sobre Maule
+(verano): de **52 % a 100 % de cobertura**, rellenando 247 k huecos en **5.1 s**,
+con el bullseye de inflación intacto y un mapa de σ que marca alta incertidumbre
+donde se interpoló lejos de datos. La salida (campo continuo + capa de
+incertidumbre) es la entrada natural del módulo `features` / Smelt.
+
 ## Próximos refinamientos sugeridos
 
 1. ~~Deramp nativo~~ ✓ (`postprocess::remove_ramp`).

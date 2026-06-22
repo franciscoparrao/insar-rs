@@ -13,6 +13,7 @@
 
 pub mod atmosphere;
 pub mod error;
+pub mod features;
 pub mod inversion;
 pub mod io;
 pub mod network;

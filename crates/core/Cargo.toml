@@ -24,6 +24,8 @@ roxmltree.workspace = true
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
+# Relleno de huecos por kriging (acoplamiento suelto: solo para ejemplos).
+geostat-core = { path = "../../../geostat-rs/crates/geostat-core" }
 
 [[bench]]
 name = "sbas"
