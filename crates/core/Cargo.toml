@@ -28,6 +28,8 @@ criterion = { version = "0.5", features = ["html_reports"] }
 geostat-core = { path = "../../../geostat-rs/crates/geostat-core" }
 # ML nativo (clasificación/regresión + CV espacial + conformal) para ejemplos.
 smelt-ml = { path = "../../../smelt" }
+# Modelado basado en agentes (ABM) para el ejemplo de exposición/impacto.
+swarm-core = { path = "../../../swarm-abm/crates/swarm-core" }
 
 [[bench]]
 name = "sbas"

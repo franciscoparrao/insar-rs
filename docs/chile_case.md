@@ -134,6 +134,32 @@ comportamiento correcto. RK aporta cuando la covariable **sí** explica la
 deformación (deslizamientos ↔ pendiente, subsidencia ↔ litología): el pipeline
 está listo para esos casos.
 
+## Impacto: modelo basado en agentes (insar-rs + swarm-abm)
+
+El último eslabón cierra la cadena **deformación → impacto** (`exposure_abm.rs`):
+el campo de velocidad InSAR es el *entorno* de un modelo basado en agentes de
+**swarm-abm**. El peligro por celda = |velocidad| (cm/año); agentes-población
+hacen random walk sobre el terreno coherente y acumulan exposición al pisar
+celdas de alta deformación. Sobre Maule (720×720, 4001 agentes, 300 pasos): la
+fracción de población en peligro converge a ~3.4 % ≈ el 3.3 % de área peligrosa
+(equilibrio correcto del random walk, sanity-check), y la exposición acumulada
+se concentra **exactamente en el bullseye de inflación**.
+
+Es una demo de mecánica (random walk uniforme); un estudio DRR real usaría
+distribución de población real + modelo de comportamiento (evitación/evacuación).
+Pero el enganche está probado: insar-rs dice *dónde y cuánto* se mueve el suelo,
+swarm-abm simula *a quién afecta*.
+
+### El stack nativo Rust, demostrado end-to-end
+
+| Motor | Rol | Ejemplo |
+|-------|-----|---------|
+| insar-rs | mide deformación (SBAS, correcciones) | (núcleo) |
+| geostat-rs | rellena huecos + incertidumbre | `gapfill_kriging.rs` |
+| Smelt | ML (clasif/regr, CV espacial, conformal) | `landslide_smelt.rs` |
+| Smelt + geostat-rs | regression kriging | `regression_kriging.rs` |
+| swarm-abm | ABM de exposición/impacto | `exposure_abm.rs` |
+
 ## Próximos refinamientos sugeridos
 
 1. ~~Deramp nativo~~ ✓ (`postprocess::remove_ramp`).
