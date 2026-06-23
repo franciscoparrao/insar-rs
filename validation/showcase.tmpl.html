@@ -237,9 +237,56 @@ footer .mono{font-size:0.78rem;color:var(--ink-faint);line-height:1.9}
     </div>
   </section>
 
-  <!-- 06 CÓMO SE USA -->
+  <div class="fringe reveal"></div>
+
+  <!-- 06 CASOS CHILENOS -->
   <section>
-    <div class="shead"><span class="snum">06</span><div><div class="kicker">cómo se usa</div><h2 class="display">Desde la terminal o desde Python</h2></div></div>
+    <div class="shead"><span class="snum">06</span><div><div class="kicker">casos chilenos · los Andes</div><h2 class="display">Donde una red ingenua no ve nada</h2></div></div>
+    <div class="col">
+      <p class="lead">Laguna del Maule infla 18–27 cm/año: de los volcanes de deformación más rápida del planeta. El primer intento no recuperó nada — la nieve invernal andina decorrelaciona el centro deformante. El diagnóstico (no el motor, la estrategia) llevó a una red de interferogramas <em>solo de verano</em>, con puentes anuales que conectan estaciones coherentes.</p>
+    </div>
+    <figure class="reveal">
+      <div class="figgrid">
+        <div><div class="fig-panel"><img src="__MAULE_VEL__" alt="Velocidad LOS Maule"></div></div>
+        <div><div class="fig-panel" style="padding:.9rem .6rem">__MAULE_TS__</div></div>
+      </div>
+      <figcaption><b>Laguna del Maule.</b> Velocidad LOS (izq.) con el bullseye de inflación centrado en el lago; serie temporal del pico (der.): −__MAULE_V__ cm/año sobre 3.3 años, consistente con lo publicado.</figcaption>
+    </figure>
+    <div class="col"><p class="pull">−__MAULE_V__ cm/año, __MAULE_DISP__ cm acumulados — recuperados donde una red de estaciones mezcladas quedaba ciega.</p></div>
+    <div class="duo" style="margin-top:1.4rem">
+      <figure class="reveal" style="margin:0">
+        <div class="fig-panel"><img src="__ATACAMA_VEL__" alt="Velocidad LOS Atacama"></div>
+        <figcaption><b>Salar de Atacama.</b> Subsidencia por extracción de salmuera de litio, coherencia 0.999. La corrección troposférica nativa recorta el scatter un 56%.</figcaption>
+      </figure>
+      <div>
+        <h3>El mismo motor, distinto terreno</h3>
+        <p>Volcán nevado de deformación récord o salar árido de subsidencia lenta: cambia el dato de entrada, no el motor. Cada caso dejó un refinamiento en el código — corrección de errores de desenrollado por cierre de fase, deramp, troposfera topo-correlacionada, redes estacionales.</p>
+      </div>
+    </div>
+  </section>
+
+  <div class="fringe thin reveal"></div>
+
+  <!-- 07 EL ECOSISTEMA -->
+  <section>
+    <div class="shead"><span class="snum">07</span><div><div class="kicker">el ecosistema</div><h2 class="display">Un stack, no una herramienta</h2></div></div>
+    <div class="col"><p class="lead">La deformación es el principio, no el fin. insar·rs compone con la familia de motores Rust del autor —mismo <span class="mono">ndarray</span>, sin Python, sin GIL— para llevar la medición hasta el impacto.</p></div>
+    <div class="flow reveal">
+      <div class="step"><span class="k">insar·rs</span><span class="t">mide deformación</span></div><span class="arr">→</span>
+      <div class="step"><span class="k">geostat-rs</span><span class="t">rellena huecos + incertidumbre</span></div><span class="arr">→</span>
+      <div class="step"><span class="k">Smelt</span><span class="t">ML: CV espacial + conformal</span></div><span class="arr">→</span>
+      <div class="step"><span class="k">swarm-abm</span><span class="t">simula el impacto</span></div>
+    </div>
+    <figure class="reveal">
+      <div class="fig-panel"><img src="__CHAIN__" alt="Cadena geostat + ABM"></div>
+      <figcaption><b>Aguas abajo del motor.</b> Izq.: el campo de velocidad completado por kriging (geostat-rs) donde la coherencia cae. Der.: un modelo basado en agentes (swarm-abm) usa la deformación como entorno y acumula la exposición de la población en la zona de peligro — la cadena deformación → impacto.</figcaption>
+    </figure>
+    <div class="col"><p>De un interferograma a un mapa de exposición, todo nativo en Rust y en segundos. La deformación deja de ser una imagen y se vuelve una variable que predice y simula peligro.</p></div>
+  </section>
+
+  <!-- 08 CÓMO SE USA -->
+  <section>
+    <div class="shead"><span class="snum">08</span><div><div class="kicker">cómo se usa</div><h2 class="display">Desde la terminal o desde Python</h2></div></div>
     <div class="duo">
       <div>
         <h3>CLI</h3>
