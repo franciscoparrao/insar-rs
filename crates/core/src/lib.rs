@@ -12,6 +12,7 @@
 //! - API pública devuelve [`Result`]; sin `panic!` en rutas públicas.
 
 pub mod atmosphere;
+pub mod decompose;
 pub mod error;
 pub mod features;
 pub mod inversion;
