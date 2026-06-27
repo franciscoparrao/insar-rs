@@ -28,31 +28,43 @@ PT = "POINT(-71.68888 -33.36737)"  # Playa El Canelo, Algarrobo
 CREDITS_PER_JOB = 15  # INSAR_GAMMA, aprox (cuota mensual HyP3 ~10.000)
 
 
-def find_pairs(track, fd, start, end, max_bt, max_pairs):
-    """Pares short-baseline consecutivos de SLC en un track."""
+def find_pairs(track, fd, start, end, max_bt, max_pairs, pairing="sequential"):
+    """Pares de SLC en un track.
+
+    - pairing="sequential": pares short-baseline consecutivos (≤max_bt días),
+      recortados a max_pairs (los más recientes). Para redes SBAS.
+    - pairing="span": UN par de baseline larga, de la escena más antigua a la
+      más reciente de la ventana (desplazamiento acumulado). Ignora max_bt.
+    """
     res = asf.search(
         intersectsWith=PT, platform="Sentinel-1", processingLevel="SLC",
         beamMode="IW", flightDirection=fd, relativeOrbit=track,
         start=start, end=end,
     )
-    scenes = []
-    for r in res:
-        p = r.properties
-        scenes.append((p["startTime"][:10], p["sceneName"]))
     # una escena por fecha (evita frames duplicados del mismo paso)
     by_date = {}
-    for d, nm in scenes:
-        by_date.setdefault(d, nm)
+    for r in res:
+        p = r.properties
+        by_date.setdefault(p["startTime"][:10], p["sceneName"])
     seq = sorted(by_date.items())  # [(fecha, granule), ...] ascendente en tiempo
+    if len(seq) < 2:
+        return []
+
+    def bt_days(a, b):
+        return (datetime.strptime(b, "%Y-%m-%d") - datetime.strptime(a, "%Y-%m-%d")).days
+
+    if pairing == "span":
+        (d1, g1), (d2, g2) = seq[0], seq[-1]
+        return [(d1, d2, bt_days(d1, d2), g1, g2)]
+
     pairs = []
     for i in range(len(seq) - 1):
         d1, g1 = seq[i]
         d2, g2 = seq[i + 1]
-        bt = (datetime.strptime(d2, "%Y-%m-%d") - datetime.strptime(d1, "%Y-%m-%d")).days
+        bt = bt_days(d1, d2)
         if bt <= max_bt:
             pairs.append((d1, d2, bt, g1, g2))
-    # los más recientes primero, recorta a max_pairs
-    pairs.sort(key=lambda x: x[1], reverse=True)
+    pairs.sort(key=lambda x: x[1], reverse=True)  # más recientes primero
     return pairs[:max_pairs]
 
 
@@ -64,6 +76,8 @@ def main():
     ap.add_argument("--desc-track", type=int, default=156)
     ap.add_argument("--max-bt", type=int, default=24, help="baseline temporal máx (días)")
     ap.add_argument("--max-pairs", type=int, default=4, help="pares por geometría")
+    ap.add_argument("--pairing", choices=["sequential", "span"], default="sequential",
+                    help="span = 1 par largo (acumulado); sequential = red short-baseline")
     ap.add_argument("--out", default="data/algarrobo_hyp3")
     ap.add_argument("--submit", action="store_true", help="ENVIAR los jobs (gasta créditos)")
     ap.add_argument("--watch", action="store_true", help="esperar y descargar resultados")
@@ -71,9 +85,9 @@ def main():
 
     plan = {
         ("asc", "ASCENDING", args.asc_track): find_pairs(
-            args.asc_track, "ASCENDING", args.start, args.end, args.max_bt, args.max_pairs),
+            args.asc_track, "ASCENDING", args.start, args.end, args.max_bt, args.max_pairs, args.pairing),
         ("desc", "DESCENDING", args.desc_track): find_pairs(
-            args.desc_track, "DESCENDING", args.start, args.end, args.max_bt, args.max_pairs),
+            args.desc_track, "DESCENDING", args.start, args.end, args.max_bt, args.max_pairs, args.pairing),
     }
 
     total = 0
