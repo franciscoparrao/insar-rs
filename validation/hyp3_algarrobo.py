@@ -28,13 +28,15 @@ PT = "POINT(-71.68888 -33.36737)"  # Playa El Canelo, Algarrobo
 CREDITS_PER_JOB = 15  # INSAR_GAMMA, aprox (cuota mensual HyP3 ~10.000)
 
 
-def find_pairs(track, fd, start, end, max_bt, max_pairs, pairing="sequential"):
+def find_pairs(track, fd, start, end, max_bt, max_pairs, pairing="sequential", n_epochs=6):
     """Pares de SLC en un track.
 
     - pairing="sequential": pares short-baseline consecutivos (≤max_bt días),
-      recortados a max_pairs (los más recientes). Para redes SBAS.
+      recortados a max_pairs (los más recientes).
     - pairing="span": UN par de baseline larga, de la escena más antigua a la
       más reciente de la ventana (desplazamiento acumulado). Ignora max_bt.
+    - pairing="sbas": red SBAS redundante sobre las `n_epochs` épocas más
+      recientes: pares i→i+1 e i→i+2 (loops para promediar atmósfera).
     """
     res = asf.search(
         intersectsWith=PT, platform="Sentinel-1", processingLevel="SLC",
@@ -57,6 +59,21 @@ def find_pairs(track, fd, start, end, max_bt, max_pairs, pairing="sequential"):
         (d1, g1), (d2, g2) = seq[0], seq[-1]
         return [(d1, d2, bt_days(d1, d2), g1, g2)]
 
+    if pairing == "sbas":
+        # N épocas repartidas uniformemente en la ventana (span + pares cortos).
+        if len(seq) <= n_epochs:
+            ep = seq
+        else:
+            idx = [round(k * (len(seq) - 1) / (n_epochs - 1)) for k in range(n_epochs)]
+            ep = [seq[i] for i in sorted(set(idx))]
+        pairs = []
+        for i in range(len(ep)):
+            for j in (i + 1, i + 2):  # i→i+1 e i→i+2 (redundancia)
+                if j < len(ep):
+                    (d1, g1), (d2, g2) = ep[i], ep[j]
+                    pairs.append((d1, d2, bt_days(d1, d2), g1, g2))
+        return pairs
+
     pairs = []
     for i in range(len(seq) - 1):
         d1, g1 = seq[i]
@@ -76,8 +93,9 @@ def main():
     ap.add_argument("--desc-track", type=int, default=156)
     ap.add_argument("--max-bt", type=int, default=24, help="baseline temporal máx (días)")
     ap.add_argument("--max-pairs", type=int, default=4, help="pares por geometría")
-    ap.add_argument("--pairing", choices=["sequential", "span"], default="sequential",
-                    help="span = 1 par largo (acumulado); sequential = red short-baseline")
+    ap.add_argument("--pairing", choices=["sequential", "span", "sbas"], default="sequential",
+                    help="sbas = red redundante (i+1,i+2) sobre N épocas; span = 1 par largo")
+    ap.add_argument("--n-epochs", type=int, default=6, help="épocas para la red SBAS")
     ap.add_argument("--out", default="data/algarrobo_hyp3")
     ap.add_argument("--submit", action="store_true", help="ENVIAR los jobs (gasta créditos)")
     ap.add_argument("--watch", action="store_true", help="esperar y descargar resultados")
@@ -85,9 +103,11 @@ def main():
 
     plan = {
         ("asc", "ASCENDING", args.asc_track): find_pairs(
-            args.asc_track, "ASCENDING", args.start, args.end, args.max_bt, args.max_pairs, args.pairing),
+            args.asc_track, "ASCENDING", args.start, args.end, args.max_bt, args.max_pairs,
+            args.pairing, args.n_epochs),
         ("desc", "DESCENDING", args.desc_track): find_pairs(
-            args.desc_track, "DESCENDING", args.start, args.end, args.max_bt, args.max_pairs, args.pairing),
+            args.desc_track, "DESCENDING", args.start, args.end, args.max_bt, args.max_pairs,
+            args.pairing, args.n_epochs),
     }
 
     total = 0
