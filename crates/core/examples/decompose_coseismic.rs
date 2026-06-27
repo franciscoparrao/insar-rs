@@ -24,6 +24,8 @@ use surtgis_core::io::write_geotiff;
 use surtgis_core::{GeoTransform, Raster};
 
 use insar_core::decompose::{decompose_asc_desc, LosVector};
+use insar_core::postprocess::{remove_ramp, RampKind};
+use insar_core::troposphere::correct_topo_correlated;
 
 #[derive(Deserialize)]
 struct Geo {
@@ -107,6 +109,53 @@ fn geom(meta: &Meta, args: &[String], label: &str) -> LosVector {
     g
 }
 
+fn has(args: &[String], key: &str) -> bool {
+    args.iter().any(|a| a == key)
+}
+
+/// Píxel (fila, col) más cercano a una coordenada lon/lat según la geo del meta.
+fn lonlat_rc(m: &Meta, lon: f64, lat: f64) -> (usize, usize) {
+    let c = ((lon - m.geo.lon0) / m.geo.dlon).round().clamp(0.0, (m.cols - 1) as f64) as usize;
+    let r = ((lat - m.geo.lat0) / m.geo.dlat).round().clamp(0.0, (m.rows - 1) as f64) as usize;
+    (r, c)
+}
+
+/// Aplica troposfera (topo-correlacionada) + deramp + referencia a un LOS, in situ.
+fn correct(los: &mut ndarray::Array2<f32>, dem: Option<&ndarray::Array2<f32>>, m: &Meta, args: &[String], label: &str) {
+    if has(args, "--tropo") {
+        match dem {
+            Some(d) => {
+                correct_topo_correlated(los, d, None, 1, true).unwrap();
+                println!("  [{label}] troposfera topo-correlacionada removida");
+            }
+            None => eprintln!("  [{label}] aviso: --tropo sin dem.f32, omitida"),
+        }
+    }
+    if has(args, "--deramp") {
+        remove_ramp(los, RampKind::Linear, None).unwrap();
+        println!("  [{label}] deramp planar removido");
+    }
+    if let (Some(rlon), Some(rlat)) = (argf(args, "--ref-lon"), argf(args, "--ref-lat")) {
+        let (r, c) = lonlat_rc(m, rlon, rlat);
+        let v = los[[r, c]];
+        if v.is_finite() {
+            los.mapv_inplace(|x| x - v);
+            println!("  [{label}] referencia ({rlon:.4},{rlat:.4})=({r},{c}) restada ({:.2} cm)", v * 100.0);
+        } else {
+            eprintln!("  [{label}] aviso: píxel de referencia NaN, no aplicada");
+        }
+    }
+}
+
+fn read_dem(dir: &Path, rows: usize, cols: usize) -> Option<ndarray::Array2<f32>> {
+    let p = dir.join("dem.f32");
+    if !p.exists() {
+        return None;
+    }
+    let v = read_f32(&p, rows * cols);
+    Some(ndarray::Array2::from_shape_vec((rows, cols), v).unwrap())
+}
+
 fn write_tif(path: &Path, data: &[f32], m: &Meta) {
     let mut raster = Raster::from_vec(data.to_vec(), m.rows, m.cols).unwrap();
     raster.set_transform(GeoTransform::new(m.geo.lon0, m.geo.lat0, m.geo.dlon, m.geo.dlat));
@@ -130,8 +179,19 @@ fn main() {
     let ga = geom(&ma, &args, "asc");
     let gd = geom(&md, &args, "desc");
 
-    let la2 = ndarray::Array2::from_shape_vec((ma.rows, ma.cols), la).unwrap();
-    let ld2 = ndarray::Array2::from_shape_vec((md.rows, md.cols), ld).unwrap();
+    let mut la2 = ndarray::Array2::from_shape_vec((ma.rows, ma.cols), la).unwrap();
+    let mut ld2 = ndarray::Array2::from_shape_vec((md.rows, md.cols), ld).unwrap();
+
+    // Correcciones por geometría (troposfera + deramp + referencia) ANTES de
+    // descomponer — son fenómenos de la línea de vista. Activables por flags.
+    if has(&args, "--tropo") || has(&args, "--deramp") || arg(&args, "--ref-lon").is_some() {
+        println!("correcciones por geometría:");
+        let dem_a = read_dem(&asc_dir, ma.rows, ma.cols);
+        let dem_d = read_dem(&desc_dir, md.rows, md.cols);
+        correct(&mut la2, dem_a.as_ref(), &ma, &args, "asc");
+        correct(&mut ld2, dem_d.as_ref(), &md, &args, "desc");
+    }
+
     let out = decompose_asc_desc(&la2, ga, &ld2, gd).unwrap();
 
     // Estadística rápida del alzamiento (cm).

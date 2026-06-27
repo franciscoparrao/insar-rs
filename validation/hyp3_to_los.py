@@ -67,7 +67,16 @@ def classify(folder):
     return "asc" if (m and int(m.group(2)) >= 18) else "desc"
 
 
-def process(folder, label, ref, geo, outdir):
+def fetch_dem(ref):
+    """Baja el Copernicus GLO-30 (Planetary Computer) y lo alinea a la grilla
+    de referencia, con SurtGIS nativo. Devuelve el array del DEM."""
+    surt("stac", "fetch-mosaic", "--catalog", "pc", "--bbox=" + ",".join(map(str, BBOX)),
+         "--collection", "cop-dem-glo-30", "/tmp/cop_dem.tif")
+    surt("resample", "/tmp/cop_dem.tif", "/tmp/dem_ref.tif", "--reference", ref, "-m", "bilinear")
+    return tifffile.imread("/tmp/dem_ref.tif").astype(np.float32)
+
+
+def process(folder, label, ref, geo, dem, outdir):
     base = glob.glob(f"{folder}/*_unw_phase.tif")[0].rsplit("_unw_phase.tif", 1)[0]
     unw = to_grid(f"{base}_unw_phase.tif", ref, f"/tmp/{label}_unw.tif")
     corr = to_grid(f"{base}_corr.tif", ref, f"/tmp/{label}_corr.tif")
@@ -92,6 +101,7 @@ def process(folder, label, ref, geo, outdir):
     }
     json.dump(meta, open(f"{out}/meta.json", "w"), indent=2)
     los.tofile(f"{out}/los.f32")
+    dem.tofile(f"{out}/dem.f32")  # Copernicus GLO-30, para corrección troposférica
     print(f"[{label}] {nr}×{nc}  coh>0.3: {valid.sum()}/{nr*nc} px  "
           f"θ_elev={math.degrees(th):.1f}° ê=({ev[0]:.3f},{ev[1]:.3f},{ev[2]:.3f})  "
           f"LOS {np.nanmin(los)*100:.1f}..{np.nanmax(los)*100:.1f} cm → {out}")
@@ -114,8 +124,12 @@ def main():
     geo = read_geo("/tmp/ref.tif")
     print(f"grilla de referencia: origen {geo[0]:.4f},{geo[1]:.4f} px {geo[2]}")
 
+    # DEM Copernicus GLO-30 desde Planetary Computer (SurtGIS nativo), grilla común.
+    dem = fetch_dem("/tmp/ref.tif")
+    print(f"DEM Copernicus alineado: {dem.shape}, {np.nanmin(dem):.0f}..{np.nanmax(dem):.0f} m")
+
     for f in folders:
-        process(f, classify(f), "/tmp/ref.tif", geo, args.outdir)
+        process(f, classify(f), "/tmp/ref.tif", geo, dem, args.outdir)
 
 
 if __name__ == "__main__":
