@@ -106,21 +106,28 @@ def main():
 
     from hyp3_sdk import HyP3
     hyp3 = HyP3()  # ~/.netrc
-    batch = None
     from hyp3_sdk import Batch
     batch = Batch()
     for (label, fd, track), pairs in plan.items():
         for d1, d2, bt, g1, g2 in pairs:
-            job = hyp3.submit_insar_job(
-                g1, g2, name=f"algarrobo_{label}_{d1}_{d2}",
+            name = f"algarrobo_{label}_{d1}_{d2}"
+            # Idempotente: reusa un job ya enviado con este nombre (no re-gasta).
+            existing = hyp3.find_jobs(name=name)
+            if len(existing) > 0:
+                print(f"reuso [{label}] {name} ({len(existing)} job/s ya en HyP3)")
+                batch += existing
+                continue
+            # submit_insar_job devuelve un Batch en hyp3_sdk v7.
+            submitted = hyp3.submit_insar_job(
+                g1, g2, name=name,
                 include_look_vectors=True,   # lv_theta/lv_phi → geometría para decompose
                 include_inc_map=True,
                 apply_water_mask=True,
                 looks="20x4",
             )
-            batch += job
-            print(f"enviado [{label}] {d1}→{d2}  job {job.job_id[:8]}")
-    print(f"\n{len(batch)} jobs en cola.")
+            batch += submitted
+            print(f"enviado [{label}] {d1}→{d2}  ({name})")
+    print(f"\n{len(batch)} jobs en cola/seguimiento.")
 
     if args.watch:
         import os
