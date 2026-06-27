@@ -33,12 +33,23 @@ struct Geo {
     dlat: f64,
 }
 #[derive(Deserialize)]
+struct LosVecJson {
+    east: f64,
+    north: f64,
+    up: f64,
+}
+#[derive(Deserialize)]
 struct Meta {
     rows: usize,
     cols: usize,
+    #[serde(default)]
     incidence_deg: f64,
     #[serde(default)]
     heading_deg: Option<f64>,
+    /// Vector de vista ENU directo (p.ej. promedio de lv_theta/lv_phi de HyP3);
+    /// si está, manda sobre incidence/heading.
+    #[serde(default)]
+    los_vector: Option<LosVecJson>,
     geo: Geo,
 }
 
@@ -75,6 +86,15 @@ fn argf(args: &[String], key: &str) -> Option<f64> {
 }
 
 fn geom(meta: &Meta, args: &[String], label: &str) -> LosVector {
+    // Prioridad: vector de vista directo del meta (HyP3) > CLI/incidence+heading.
+    if argf(args, &format!("--inc-{label}")).is_none()
+        && argf(args, &format!("--head-{label}")).is_none()
+        && let Some(v) = &meta.los_vector
+    {
+        let g = LosVector { east: v.east, north: v.north, up: v.up };
+        println!("  {label}: ê directo del meta = (E {:.3}, N {:.3}, U {:.3})", g.east, g.north, g.up);
+        return g;
+    }
     let inc = argf(args, &format!("--inc-{label}")).unwrap_or(meta.incidence_deg);
     let head = argf(args, &format!("--head-{label}"))
         .or(meta.heading_deg)
