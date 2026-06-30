@@ -58,7 +58,7 @@ def pair_dates(folder):
 
 
 def baseline_days(folder):
-    m = re.search(r"_VVR(\d+)_", os.path.basename(folder))
+    m = re.search(r"_VV[RP](\d+)_", os.path.basename(folder))  # VVR (viejos) y VVP (nuevos)
     return int(m.group(1)) if m else 0
 
 
@@ -69,18 +69,23 @@ def fetch_dem(ref):
     return tifffile.imread("/tmp/dem_ref.tif").astype(np.float32)
 
 
-def build(label, folders, ref, geo, dem, outdir):
+def build(label, folders, ref, geo, dem, outdir, tag=""):
     folders = sorted(folders, key=lambda f: pair_dates(f))
     epochs = sorted({d for f in folders for d in pair_dates(f)})
     eidx = {d: i for i, d in enumerate(epochs)}
     nr = nc = None
     phase, coher, pairs, thetas, phis = [], [], [], [], []
+    skipped = []
     for f in folders:
         base = glob.glob(f"{f}/*_unw_phase.tif")[0].rsplit("_unw_phase.tif", 1)[0]
-        unw = to_grid(f"{base}_unw_phase.tif", ref, f"/tmp/s_unw.tif")
-        cc = to_grid(f"{base}_corr.tif", ref, f"/tmp/s_corr.tif")
-        th = to_grid(f"{base}_lv_theta.tif", ref, f"/tmp/s_th.tif")
-        ph = to_grid(f"{base}_lv_phi.tif", ref, f"/tmp/s_ph.tif")
+        try:  # salta pares con TIFFs truncados/ilegibles (descarga incompleta)
+            unw = to_grid(f"{base}_unw_phase.tif", ref, f"/tmp/s_unw.tif")
+            cc = to_grid(f"{base}_corr.tif", ref, f"/tmp/s_corr.tif")
+            th = to_grid(f"{base}_lv_theta.tif", ref, f"/tmp/s_th.tif")
+            ph = to_grid(f"{base}_lv_phi.tif", ref, f"/tmp/s_ph.tif")
+        except Exception:
+            skipped.append(os.path.basename(f)[:40])
+            continue
         nr, nc = unw.shape
         m = (unw != 0) & np.isfinite(unw) & (cc > 0.3)
         phase.append(np.where(m, unw, np.nan).astype(np.float32))
@@ -88,11 +93,49 @@ def build(label, folders, ref, geo, dem, outdir):
         r, s = pair_dates(f)
         pairs.append({"reference": eidx[r], "secondary": eidx[s], "perp_baseline_m": 0.0})
         thetas.append(th[m].mean()); phis.append(ph[m].mean())
+    if skipped:
+        print(f"[{label}] saltados {len(skipped)} pares ilegibles: {', '.join(skipped[:4])}{'…' if len(skipped)>4 else ''}")
+    # La red combinada (varios envíos) puede tener clusters de fechas sin par que
+    # los una → SBAS falla. Quedarse con el COMPONENTE CONEXO más grande.
+    adj = {}
+    for p in pairs:
+        adj.setdefault(p["reference"], set()).add(p["secondary"])
+        adj.setdefault(p["secondary"], set()).add(p["reference"])
+    seen, comps = set(), []
+    for n in adj:
+        if n in seen:
+            continue
+        stack_, comp = [n], []
+        while stack_:
+            u = stack_.pop()
+            if u in seen:
+                continue
+            seen.add(u); comp.append(u)
+            stack_.extend(adj[u] - seen)
+        comps.append(set(comp))
+    keep = max(comps, key=len) if comps else set()
+    dropped = len(pairs)
+    kept_idx = [k for k, p in enumerate(pairs)
+                if p["reference"] in keep and p["secondary"] in keep]
+    pairs = [pairs[k] for k in kept_idx]
+    phase = [phase[k] for k in kept_idx]
+    coher = [coher[k] for k in kept_idx]
+    thetas = [thetas[k] for k in kept_idx]; phis = [phis[k] for k in kept_idx]
+    if dropped - len(pairs):
+        print(f"[{label}] red: {len(comps)} componentes; conservo el mayor "
+              f"({len(keep)} épocas, {len(pairs)} pares), descarto {dropped-len(pairs)} pares de clusters menores")
+    # Reindexa al componente conservado.
+    used = sorted(keep)
+    remap = {old: new for new, old in enumerate(used)}
+    epochs = [epochs[i] for i in used]
+    for p in pairs:
+        p["reference"] = remap[p["reference"]]
+        p["secondary"] = remap[p["secondary"]]
 
     th, ph = float(np.mean(thetas)), float(np.mean(phis))
     ev = (math.cos(th) * math.cos(ph), math.cos(th) * math.sin(ph), math.sin(th))
     ox, oy, px, py = geo
-    out = f"{outdir}/algarrobo_{label}_stack"
+    out = f"{outdir}/algarrobo_{label}{tag}_stack"
     os.makedirs(out, exist_ok=True)
     meta = {
         "wavelength_m": S1_WAVELENGTH, "incidence_deg": round(90 - math.degrees(th), 2),
@@ -114,6 +157,7 @@ def main():
     ap.add_argument("hyp3_dir")
     ap.add_argument("--outdir", default="validation")
     ap.add_argument("--max-bt", type=int, default=200, help="excluir pares de baseline > esto (días)")
+    ap.add_argument("--tag", default="", help="sufijo del dir de salida (p.ej. _short)")
     args = ap.parse_args()
     allf = [d.rstrip("/") for d in glob.glob(f"{args.hyp3_dir}/*/") if glob.glob(f"{d}/*_unw_phase.tif")]
     allf = [f for f in allf if baseline_days(f) <= args.max_bt]  # excluye span pairs
@@ -129,7 +173,7 @@ def main():
     for label in ("asc", "desc"):
         fs = [f for f in allf if classify(f) == label]
         if fs:
-            build(label, fs, "/tmp/ref.tif", geo, dem, args.outdir)
+            build(label, fs, "/tmp/ref.tif", geo, dem, args.outdir, args.tag)
 
 
 if __name__ == "__main__":

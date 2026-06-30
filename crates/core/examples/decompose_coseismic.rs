@@ -137,12 +137,28 @@ fn correct(los: &mut ndarray::Array2<f32>, dem: Option<&ndarray::Array2<f32>>, m
     }
     if let (Some(rlon), Some(rlat)) = (argf(args, "--ref-lon"), argf(args, "--ref-lat")) {
         let (r, c) = lonlat_rc(m, rlon, rlat);
-        let v = los[[r, c]];
-        if v.is_finite() {
+        // Referencia como ÁREA: promedio de una ventana (2·rad+1)² de píxeles
+        // finitos alrededor del punto (menos ruido que un solo píxel).
+        let rad = argf(args, "--ref-radius").map(|v| v as isize).unwrap_or(2);
+        let (mut sum, mut n) = (0.0f64, 0u32);
+        for dr in -rad..=rad {
+            for dc in -rad..=rad {
+                let (rr, cc) = (r as isize + dr, c as isize + dc);
+                if rr >= 0 && cc >= 0 && (rr as usize) < m.rows && (cc as usize) < m.cols {
+                    let x = los[[rr as usize, cc as usize]];
+                    if x.is_finite() {
+                        sum += x as f64;
+                        n += 1;
+                    }
+                }
+            }
+        }
+        if n > 0 {
+            let v = (sum / n as f64) as f32;
             los.mapv_inplace(|x| x - v);
-            println!("  [{label}] referencia ({rlon:.4},{rlat:.4})=({r},{c}) restada ({:.2} cm)", v * 100.0);
+            println!("  [{label}] referencia área ({rlon:.4},{rlat:.4}) {n} px restada ({:.2} cm)", v * 100.0);
         } else {
-            eprintln!("  [{label}] aviso: píxel de referencia NaN, no aplicada");
+            eprintln!("  [{label}] aviso: ventana de referencia sin píxeles finitos, no aplicada");
         }
     }
 }
