@@ -1248,9 +1248,7 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "surtgis-core"
-version = "0.16.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "67097f61a895842785552bde039613df2a466e73642f94dbfc4c02eecc47686c"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "geo",
