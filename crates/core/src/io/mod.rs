@@ -15,7 +15,8 @@
 //!     {"reference": 0, "secondary": 1, "perp_baseline_m": 50.0,
 //!      "file": "ifg_20230101_20230113.tif"}
 //!   ],
-//!   "amplitudes": ["amp_20230101.tif", "amp_20230113.tif"]
+//!   "amplitudes": ["amp_20230101.tif", "amp_20230113.tif"],
+//!   "coherence": ["coh_20230101_20230113.tif"]
 //! }
 //! ```
 //!
@@ -26,6 +27,10 @@
 //! - `amplitudes`: requerido por [`read_amplitude_stack`]; lista alineada
 //!   1:1 con `epochs` (una amplitud por época). Puede faltar si solo se
 //!   leen interferogramas.
+//! - `coherence`: opcional; lista alineada 1:1 con `ifgs` (un GeoTIFF float32
+//!   de 1 banda por interferograma). La lee [`read_coherence_stack`]; el
+//!   pipeline la usa como calidad del desenrollado, para el píxel de
+//!   referencia automático y para los pesos WLS de la inversión.
 //!
 //! # Convención de archivos complejos (fallback re/im)
 //!
@@ -90,6 +95,8 @@ struct StackManifest {
     ifgs: Option<Vec<IfgEntry>>,
     #[serde(default)]
     amplitudes: Option<Vec<String>>,
+    #[serde(default)]
+    coherence: Option<Vec<String>>,
 }
 
 /// Lee y valida el manifiesto; devuelve manifiesto + épocas parseadas.
@@ -116,6 +123,19 @@ fn load_manifest(dir: &Path) -> Result<(StackManifest, Vec<Epoch>)> {
             InsarError::Metadata(format!("época '{s}' no es fecha ISO-8601: {e}"))
         })?;
         epochs.push(Epoch(date));
+    }
+
+    // Épocas estrictamente crecientes: una duplicada haría que write_series
+    // sobrescriba disp_YYYYMMDD.tif en silencio y que un par entre duplicadas
+    // (baseline temporal 0) degenere la matriz de diseño SBAS con un error
+    // críptico aguas abajo; el desorden rompe la parametrización por
+    // incrementos (reference < secondary en índice = en tiempo).
+    if let Some(w) = epochs.windows(2).find(|w| w[0] >= w[1]) {
+        return Err(InsarError::Metadata(format!(
+            "épocas deben ser estrictamente crecientes y sin duplicados: \
+             '{}' no es anterior a '{}'",
+            w[0].0, w[1].0
+        )));
     }
 
     Ok((manifest, epochs))
@@ -274,6 +294,54 @@ pub fn read_amplitude_stack(dir: &Path) -> Result<AmplitudeStack> {
         .map_err(|e| InsarError::DimensionMismatch(e.to_string()))?;
 
     Ok(AmplitudeStack { data, epochs, meta })
+}
+
+/// Lee el stack de coherencia declarado en `stack.json` (campo opcional
+/// `coherence`, alineado 1:1 con `ifgs`): un GeoTIFF float32 de 1 banda por
+/// interferograma. `data`: pares × filas × cols, mismo orden que `ifgs`.
+///
+/// Devuelve `Ok(None)` si el manifiesto no declara coherencia (es opcional);
+/// error si la lista está desalineada con `ifgs`, falta el campo `ifgs`, o
+/// las dimensiones difieren entre archivos.
+pub fn read_coherence_stack(dir: &Path) -> Result<Option<Array3<f32>>> {
+    let (manifest, _epochs) = load_manifest(dir)?;
+    let Some(files) = manifest.coherence.as_deref() else {
+        return Ok(None);
+    };
+    let ifgs = manifest.ifgs.as_deref().ok_or_else(|| {
+        InsarError::Metadata(
+            "stack.json declara 'coherence' pero no 'ifgs' (la coherencia se alinea 1:1 con los interferogramas)"
+                .into(),
+        )
+    })?;
+    if files.len() != ifgs.len() {
+        return Err(InsarError::Metadata(format!(
+            "{} archivos de coherencia declarados vs {} ifgs (deben estar alineados 1:1)",
+            files.len(),
+            ifgs.len()
+        )));
+    }
+    if files.is_empty() {
+        return Err(InsarError::Metadata("campo 'coherence' vacío".into()));
+    }
+
+    let mut dims: Option<(usize, usize)> = None;
+    let mut values: Vec<f32> = Vec::new();
+    for file in files {
+        let path = dir.join(file);
+        let raster = read_f32(&path)?;
+        let expected = *dims.get_or_insert_with(|| raster.shape());
+        check_dims(&path, raster.shape(), expected)?;
+        if values.is_empty() {
+            values.reserve(files.len() * expected.0 * expected.1);
+        }
+        values.extend(raster.data().iter().copied());
+    }
+
+    let (rows, cols) = dims.expect("files no vacío: len == ifgs.len() > 0 validado arriba");
+    let data = Array3::from_shape_vec((files.len(), rows, cols), values)
+        .map_err(|e| InsarError::DimensionMismatch(e.to_string()))?;
+    Ok(Some(data))
 }
 
 /// Convierte una capa 2D `f32` + metadata del stack en un `Raster` surtgis
@@ -578,6 +646,71 @@ mod tests {
     fn fecha_invalida_da_error_metadata() {
         let dir = temp_dir("bad_date");
         let manifest = MANIFEST.replace("2023-01-13", "13/01/2023");
+        fs::write(dir.join("stack.json"), manifest).unwrap();
+        let err = read_ifg_stack(&dir).unwrap_err();
+        assert!(matches!(err, InsarError::Metadata(_)), "got: {err:?}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn coherencia_opcional_ausente_y_presente() {
+        let dir = temp_dir("coh_rt");
+        build_synthetic_stack(&dir);
+
+        // El MANIFEST base no declara coherencia → Ok(None).
+        assert!(read_coherence_stack(&dir).unwrap().is_none());
+
+        // Manifiesto con coherencia alineada a los 2 ifgs.
+        let manifest = MANIFEST.replace(
+            "\"amplitudes\":",
+            "\"coherence\": [\"coh_a.tif\", \"coh_b.tif\"],\n        \"amplitudes\":",
+        );
+        fs::write(dir.join("stack.json"), manifest).unwrap();
+        for (name, val) in [("coh_a", 0.9_f32), ("coh_b", 0.6)] {
+            write_test_tif(
+                &dir.join(format!("{name}.tif")),
+                vec![val; ROWS * COLS],
+                ROWS,
+                COLS,
+            );
+        }
+        let coh = read_coherence_stack(&dir).unwrap().expect("coherencia presente");
+        assert_eq!(coh.shape(), &[2, ROWS, COLS]);
+        assert_eq!(coh[[0, 1, 1]], 0.9);
+        assert_eq!(coh[[1, 2, 3]], 0.6);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn coherencia_desalineada_da_error_metadata() {
+        let dir = temp_dir("coh_misaligned");
+        build_synthetic_stack(&dir);
+        // 2 ifgs pero 1 archivo de coherencia.
+        let manifest = MANIFEST.replace(
+            "\"amplitudes\":",
+            "\"coherence\": [\"coh_a.tif\"],\n        \"amplitudes\":",
+        );
+        fs::write(dir.join("stack.json"), manifest).unwrap();
+        let err = read_coherence_stack(&dir).unwrap_err();
+        assert!(matches!(err, InsarError::Metadata(_)), "got: {err:?}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn epoca_duplicada_da_error_metadata() {
+        let dir = temp_dir("dup_epoch");
+        let manifest = MANIFEST.replace("2023-01-13", "2023-01-01");
+        fs::write(dir.join("stack.json"), manifest).unwrap();
+        let err = read_ifg_stack(&dir).unwrap_err();
+        assert!(matches!(err, InsarError::Metadata(_)), "got: {err:?}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn epocas_desordenadas_da_error_metadata() {
+        let dir = temp_dir("unordered_epoch");
+        // La última época pasa a ser anterior a las demás → desorden.
+        let manifest = MANIFEST.replace("2023-01-25", "2022-01-25");
         fs::write(dir.join("stack.json"), manifest).unwrap();
         let err = read_ifg_stack(&dir).unwrap_err();
         assert!(matches!(err, InsarError::Metadata(_)), "got: {err:?}");

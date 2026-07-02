@@ -77,6 +77,27 @@ impl Ord for Candidate {
 /// `quality`: mapa opcional (mayor = mejor); si es None se usa calidad
 /// uniforme y semilla en el centro de la imagen. NaN se propaga.
 pub fn unwrap_2d(wrapped: &Array2<f32>, quality: Option<&Array2<f32>>) -> Result<Array2<f32>> {
+    unwrap_2d_min_quality(wrapped, quality, None)
+}
+
+/// Como [`unwrap_2d`], pero con umbral de calidad mínima: los píxeles con
+/// `quality < min_quality` se tratan como NoData (no se desenrollan y quedan
+/// NaN), evitando que píxeles de coherencia ~0 se integren tarde al árbol y
+/// propaguen errores a sus vecinos aguas abajo. Las islas que el umbral
+/// genere se manejan igual que las de NaN (re-siembra por isla).
+///
+/// Error [`InsarError::Metadata`] si se pide `min_quality` sin mapa de
+/// calidad (no hay nada que umbralizar).
+pub fn unwrap_2d_min_quality(
+    wrapped: &Array2<f32>,
+    quality: Option<&Array2<f32>>,
+    min_quality: Option<f32>,
+) -> Result<Array2<f32>> {
+    if min_quality.is_some() && quality.is_none() {
+        return Err(InsarError::Metadata(
+            "min_quality requiere un mapa de calidad (coherencia)".into(),
+        ));
+    }
     let (rows, cols) = wrapped.dim();
     if rows == 0 || cols == 0 {
         return Err(InsarError::DimensionMismatch(format!(
@@ -93,9 +114,14 @@ pub fn unwrap_2d(wrapped: &Array2<f32>, quality: Option<&Array2<f32>>) -> Result
         )));
     }
 
-    // Un píxel es válido (visitable) si su fase es finita y su calidad no es NaN.
+    // Un píxel es válido (visitable) si su fase es finita, su calidad no es
+    // NaN, y su calidad alcanza el umbral mínimo (si se configuró).
     let is_valid = |r: usize, c: usize| -> bool {
-        wrapped[[r, c]].is_finite() && quality.is_none_or(|q| !q[[r, c]].is_nan())
+        wrapped[[r, c]].is_finite()
+            && quality.is_none_or(|q| {
+                let v = q[[r, c]];
+                !v.is_nan() && min_quality.is_none_or(|thr| v >= thr)
+            })
     };
     // Calidad efectiva: uniforme (1.0) si no hay mapa.
     let qual = |r: usize, c: usize| -> f32 {
@@ -217,6 +243,21 @@ fn find_seed(
 /// Desenrolla cada interferograma del stack (paralelizable por capa).
 /// `coherence`: stack opcional con el mismo layout que `stack.data`.
 pub fn unwrap_stack(stack: &IfgStack, coherence: Option<&Array3<f32>>) -> Result<UnwrappedStack> {
+    unwrap_stack_min_quality(stack, coherence, None)
+}
+
+/// Como [`unwrap_stack`], con umbral de calidad mínima por píxel (ver
+/// [`unwrap_2d_min_quality`]). Requiere `coherence` si `min_quality` es Some.
+pub fn unwrap_stack_min_quality(
+    stack: &IfgStack,
+    coherence: Option<&Array3<f32>>,
+    min_quality: Option<f32>,
+) -> Result<UnwrappedStack> {
+    if min_quality.is_some() && coherence.is_none() {
+        return Err(InsarError::Metadata(
+            "min_quality requiere el stack de coherencia".into(),
+        ));
+    }
     if let Some(coh) = coherence
         && coh.dim() != stack.data.dim()
     {
@@ -242,7 +283,7 @@ pub fn unwrap_stack(stack: &IfgStack, coherence: Option<&Array3<f32>>) -> Result
                 }
             });
             let qual = coherence.map(|coh| coh.index_axis(Axis(0), k).to_owned());
-            unwrap_2d(&wrapped, qual.as_ref())
+            unwrap_2d_min_quality(&wrapped, qual.as_ref(), min_quality)
         })
         .collect::<Result<Vec<_>>>()?;
 
@@ -432,6 +473,33 @@ mod tests {
             (0, 0),
             1e-4,
         );
+    }
+
+    #[test]
+    fn min_quality_bloquea_pixeles_de_baja_coherencia() {
+        // Franja de calidad 0.1 con umbral 0.3: los píxeles quedan NaN y las
+        // dos islas restantes se desenrollan bien (cada una con su offset).
+        let rows = 12;
+        let cols = 15;
+        let truth = ramp(rows, cols, 0.5, 0.4);
+        let wrapped = wrap(&truth);
+        let mut quality = Array2::from_elem((rows, cols), 0.9_f32);
+        for r in 0..rows {
+            quality[[r, 7]] = 0.1;
+        }
+
+        let unw = unwrap_2d_min_quality(&wrapped, Some(&quality), Some(0.3)).unwrap();
+        for r in 0..rows {
+            assert!(unw[[r, 7]].is_nan(), "({r},7) bajo el umbral debía ser NaN");
+        }
+        assert_matches_ramp_where(&unw, &truth, (5, 3), 1e-4, |_, c| c < 7);
+        assert_matches_ramp_where(&unw, &truth, (5, 11), 1e-4, |_, c| c > 7);
+
+        // Umbral sin mapa de calidad → error claro.
+        assert!(matches!(
+            unwrap_2d_min_quality(&wrapped, None, Some(0.3)),
+            Err(InsarError::Metadata(_))
+        ));
     }
 
     #[test]

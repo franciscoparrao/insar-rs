@@ -55,7 +55,11 @@ pub struct FeatureConfig {
     pub seasonal: bool,
     /// Ajustar el término cuadrático → aceleración.
     pub acceleration: bool,
-    /// Mínimo de épocas finitas para computar features (si no, NaN).
+    /// Mínimo de épocas finitas **por píxel** para computar sus features: un
+    /// píxel con menos épocas finitas que `max(min_valid_epochs, n_coef)`
+    /// queda NaN; con épocas suficientes, el ajuste usa solo las finitas
+    /// (pinv reducida cacheada por patrón, como en la inversión SBAS). Así
+    /// la decorrelación parcial no mata el píxel completo.
     pub min_valid_epochs: usize,
 }
 
@@ -91,6 +95,11 @@ pub struct FeatureMaps {
     pub temporal_coherence: Option<Array2<f32>>,
     /// Georreferencia compartida.
     pub meta: StackMeta,
+    /// `config.seasonal` con que se extrajo: define el ESQUEMA de la tabla
+    /// (las columnas no dependen de los datos — determinismo para ML).
+    pub has_seasonal: bool,
+    /// `config.acceleration` con que se extrajo (ídem).
+    pub has_acceleration: bool,
 }
 
 /// Extrae los mapas de features de la serie. `quality` (coherencia temporal,
@@ -161,17 +170,56 @@ pub fn extract_features(
         }
     });
 
-    // Pseudoinversa cacheada (n_coef × n_epochs) con tolerancia rcond estilo
-    // numpy/LAPACK: σ_max · max(m,n) · ε_f64 (igual que en inversion).
-    let svd = a.clone().svd(true, true);
-    let s_max = svd.singular_values.iter().copied().fold(0.0_f64, f64::max);
-    let eps = s_max * (n_epochs.max(n_coef) as f64) * f64::EPSILON;
-    let pinv = svd
-        .pseudo_inverse(eps)
-        .map_err(|e| InsarError::Inversion(format!("pseudoinversa SVD de la matriz de diseño: {e}")))?;
+    // Solver del caso completo (todas las épocas finitas), cacheado una vez.
+    let full_idx: Vec<usize> = (0..n_epochs).collect();
+    let full_solver = epoch_solver(&a, full_idx, col_t).ok_or_else(|| {
+        InsarError::Inversion("pseudoinversa SVD de la matriz de diseño".into())
+    })?;
 
-    // g = Σ_k pinv[col_t, k]²  → factor de varianza de la velocidad (una vez).
-    let g_vel: f64 = (0..n_epochs).map(|k| pinv[(col_t, k)].powi(2)).sum();
+    // Umbral efectivo por píxel: configurado, pero nunca bajo n_coef (el
+    // modelo no es identificable con menos épocas que coeficientes).
+    let min_valid = config.min_valid_epochs.max(n_coef);
+
+    // Pasada 1: patrones de épocas finitas PARCIALES presentes en la grilla
+    // (bitmask por píxel, mismo esquema que la inversión SBAS).
+    let n_words = n_epochs.div_ceil(64);
+    let mask_bit = |key: &mut [u64], e: usize| key[e / 64] |= 1u64 << (e % 64);
+    let data_view = series.data.view();
+    let unique_masks: std::collections::HashSet<Vec<u64>> = (0..n_rows)
+        .into_par_iter()
+        .map(|r| {
+            let mut set: std::collections::HashSet<Vec<u64>> = std::collections::HashSet::new();
+            for c in 0..n_cols {
+                let mut key = vec![0u64; n_words];
+                let mut n_finite = 0usize;
+                for e in 0..n_epochs {
+                    if data_view[[e, r, c]].is_finite() {
+                        mask_bit(&mut key, e);
+                        n_finite += 1;
+                    }
+                }
+                if n_finite != n_epochs && n_finite >= min_valid {
+                    set.insert(key);
+                }
+            }
+            set
+        })
+        .reduce(std::collections::HashSet::new, |mut x, y| {
+            x.extend(y);
+            x
+        });
+
+    // Pasada 2: solver reducido por patrón (pinv de las filas finitas de A).
+    let solvers: std::collections::HashMap<Vec<u64>, Option<EpochSolver>> = unique_masks
+        .into_par_iter()
+        .map(|mask| {
+            let idx: Vec<usize> = (0..n_epochs)
+                .filter(|&e| mask[e / 64] & (1u64 << (e % 64)) != 0)
+                .collect();
+            let solver = epoch_solver(&a, idx, col_t);
+            (mask, solver)
+        })
+        .collect();
 
     // ----- Mapas de salida -----
     let mut velocity = Array2::<f32>::from_elem((n_rows, n_cols), f32::NAN);
@@ -213,38 +261,54 @@ pub fn extract_features(
 
     rows_iter.for_each(
         |(r, ((((((((vel, vstd), acc), r2), rms), cum), samp), sph), step))| {
-            let mut d = DVector::<f64>::zeros(n_epochs);
+            let mut d_buf: Vec<f64> = Vec::with_capacity(n_epochs);
+            let mut key = vec![0u64; n_words];
             for c in 0..n_cols {
-                // Validez: TODAS las épocas finitas, si no → todas las features NaN.
-                let mut valid = true;
+                // Épocas finitas del píxel (bitmask + valores).
+                d_buf.clear();
+                key.iter_mut().for_each(|w| *w = 0);
                 for e in 0..n_epochs {
                     let v = data[[e, r, c]];
-                    if !v.is_finite() {
-                        valid = false;
-                        break;
+                    if v.is_finite() {
+                        mask_bit(&mut key, e);
+                        d_buf.push(f64::from(v));
                     }
-                    d[e] = v as f64;
                 }
-                if !valid {
-                    continue;
+                let m = d_buf.len();
+                if m < min_valid {
+                    continue; // demasiado incompleto → NaN
                 }
 
-                // coef = pinv · d.
-                let coef = &pinv * &d;
+                // Solver: completo (camino rápido) o reducido cacheado.
+                let solver = if m == n_epochs {
+                    &full_solver
+                } else {
+                    match solvers.get(&key) {
+                        Some(Some(s)) => s,
+                        _ => continue,
+                    }
+                };
 
-                // Ajuste y residuo.
-                let fitted = &a * &coef;
+                let d = DVector::<f64>::from_column_slice(&d_buf);
+                // coef = pinv · d (sobre las épocas finitas).
+                let coef = &solver.pinv * &d;
+
+                // Ajuste y residuo sobre las épocas finitas.
                 let mut ss_res = 0.0_f64;
                 let mut d_sum = 0.0_f64;
-                for e in 0..n_epochs {
-                    let resid = d[e] - fitted[e];
+                for (i, &e) in solver.idx.iter().enumerate() {
+                    let mut fitted = 0.0_f64;
+                    for j in 0..n_coef {
+                        fitted += a[(e, j)] * coef[j];
+                    }
+                    let resid = d_buf[i] - fitted;
                     ss_res += resid * resid;
-                    d_sum += d[e];
+                    d_sum += d_buf[i];
                 }
-                let d_mean = d_sum / n_epochs as f64;
+                let d_mean = d_sum / m as f64;
                 let mut ss_tot = 0.0_f64;
-                for e in 0..n_epochs {
-                    let dev = d[e] - d_mean;
+                for &di in &d_buf {
+                    let dev = di - d_mean;
                     ss_tot += dev * dev;
                 }
 
@@ -273,21 +337,21 @@ pub fn extract_features(
                 r2[c] = r2_val as f32;
 
                 // RMS del residuo (m).
-                rms[c] = (ss_res / n_epochs as f64).sqrt() as f32;
+                rms[c] = (ss_res / m as f64).sqrt() as f32;
 
-                // Error estándar de la velocidad: sqrt(σ²·g), σ²=SS_res/(n−n_coef).
-                if n_epochs > n_coef {
-                    let sigma2 = ss_res / (n_epochs - n_coef) as f64;
-                    vstd[c] = (sigma2 * g_vel).sqrt() as f32;
+                // Error estándar de la velocidad: sqrt(σ²·g), σ²=SS_res/(m−n_coef).
+                if m > n_coef {
+                    let sigma2 = ss_res / (m - n_coef) as f64;
+                    vstd[c] = (sigma2 * solver.g_vel).sqrt() as f32;
                 }
 
-                // Desplazamiento acumulado total (m).
-                cum[c] = (d[n_epochs - 1] - d[0]) as f32;
+                // Desplazamiento acumulado (m): última − primera época FINITA.
+                cum[c] = (d_buf[m - 1] - d_buf[0]) as f32;
 
-                // Mayor salto absoluto entre épocas consecutivas (m).
+                // Mayor salto absoluto entre épocas finitas consecutivas (m).
                 let mut mstep = 0.0_f64;
-                for e in 1..n_epochs {
-                    let s = (d[e] - d[e - 1]).abs();
+                for i in 1..m {
+                    let s = (d_buf[i] - d_buf[i - 1]).abs();
                     if s > mstep {
                         mstep = s;
                     }
@@ -312,28 +376,55 @@ pub fn extract_features(
         max_step,
         temporal_coherence,
         meta: series.meta.clone(),
+        has_seasonal: config.seasonal,
+        has_acceleration: config.acceleration,
     })
+}
+
+/// Pseudoinversa del subconjunto de filas (épocas) `idx` de la matriz de
+/// diseño, más el factor de varianza de la velocidad `g = Σ_k pinv[t,k]²`.
+struct EpochSolver {
+    /// Épocas (índices originales) que entran al ajuste, ascendentes.
+    idx: Vec<usize>,
+    /// Pseudoinversa (n_coef × m).
+    pinv: DMatrix<f64>,
+    g_vel: f64,
+}
+
+/// `None` si hay menos filas que coeficientes o la SVD falla. Tolerancia
+/// rcond estilo numpy/LAPACK (igual que en la inversión SBAS).
+fn epoch_solver(a: &DMatrix<f64>, idx: Vec<usize>, col_t: usize) -> Option<EpochSolver> {
+    let n_coef = a.ncols();
+    let m = idx.len();
+    if m < n_coef {
+        return None;
+    }
+    let a_sub = DMatrix::<f64>::from_fn(m, n_coef, |i, j| a[(idx[i], j)]);
+    let svd = a_sub.svd(true, true);
+    let s_max = svd.singular_values.iter().copied().fold(0.0_f64, f64::max);
+    let eps = s_max * (m.max(n_coef) as f64) * f64::EPSILON;
+    let pinv = svd.pseudo_inverse(eps).ok()?;
+    let g_vel: f64 = (0..m).map(|k| pinv[(col_t, k)].powi(2)).sum();
+    Some(EpochSolver { idx, pinv, g_vel })
 }
 
 impl FeatureMaps {
     /// Nombres de las features, en el mismo orden que las columnas de
-    /// [`Self::to_table`]. Excluye las desactivadas (todo-NaN) en la config.
+    /// [`Self::to_table`]. El esquema depende SOLO de la config con que se
+    /// extrajo ([`Self::has_seasonal`]/[`Self::has_acceleration`]/coherencia
+    /// presente), nunca de los datos: dos corridas con la misma config
+    /// producen siempre las mismas columnas (determinismo para modelos ML).
     pub fn feature_names(&self) -> Vec<&'static str> {
-        // Una feature opcional está "activa" si su mapa tiene algún valor finito.
-        let active = |m: &Array2<f32>| m.iter().any(|v| v.is_finite());
-        let accel_on = active(&self.acceleration);
-        let seasonal_on = active(&self.seasonal_amplitude);
-
         let mut names = Vec::new();
         names.push("velocity");
         names.push("velocity_std");
-        if accel_on {
+        if self.has_acceleration {
             names.push("acceleration");
         }
         names.push("linearity_r2");
         names.push("residual_rms");
         names.push("cumulative");
-        if seasonal_on {
+        if self.has_seasonal {
             names.push("seasonal_amplitude");
             names.push("seasonal_phase");
         }
@@ -346,20 +437,16 @@ impl FeatureMaps {
 
     /// Mapas activos en el mismo orden que [`Self::feature_names`].
     fn active_maps(&self) -> Vec<&Array2<f32>> {
-        let active = |m: &Array2<f32>| m.iter().any(|v| v.is_finite());
-        let accel_on = active(&self.acceleration);
-        let seasonal_on = active(&self.seasonal_amplitude);
-
         let mut maps: Vec<&Array2<f32>> = Vec::new();
         maps.push(&self.velocity);
         maps.push(&self.velocity_std);
-        if accel_on {
+        if self.has_acceleration {
             maps.push(&self.acceleration);
         }
         maps.push(&self.linearity_r2);
         maps.push(&self.residual_rms);
         maps.push(&self.cumulative);
-        if seasonal_on {
+        if self.has_seasonal {
             maps.push(&self.seasonal_amplitude);
             maps.push(&self.seasonal_phase);
         }
@@ -528,22 +615,42 @@ mod tests {
     }
 
     #[test]
-    fn nan_en_serie_propaga_a_todas_las_features() {
+    fn nan_parcial_ajusta_con_las_epocas_finitas() {
+        // 12 épocas lineales con 2 NaN: quedan 10 ≥ max(min_valid=5, n_coef=5)
+        // → el píxel se ajusta con las finitas y recupera la velocidad (antes
+        // el all-or-nothing lo dejaba NaN completo).
+        let v_true = -0.05_f64;
+        let epochs = epochs_n(12, 24);
+        let t: Vec<f64> = epochs.iter().map(|e| e.years_since(&epochs[0])).collect();
+        let d: Vec<f64> = t.iter().map(|&ti| v_true * ti).collect();
+        let mut series = series_1px(&epochs, &d);
+        series.data[[3, 0, 0]] = f32::NAN;
+        series.data[[7, 0, 0]] = f32::NAN;
+
+        let f = extract_features(&series, None, &cfg()).unwrap();
+        let v = f.velocity[[0, 0]] as f64;
+        assert!((v - v_true).abs() < 1e-4, "v con NaN parcial = {v}");
+        assert!(f.residual_rms[[0, 0]] < 1e-5);
+        // Acumulado usa la primera/última época FINITA (aquí 0 y 11, ambas finitas).
+        assert!((f.cumulative[[0, 0]] as f64 - v_true * t[11]).abs() < 1e-5);
+    }
+
+    #[test]
+    fn pixel_bajo_min_valid_queda_nan() {
+        // 8 épocas pero solo 4 finitas < max(min_valid=5, n_coef=5) → NaN.
         let epochs = epochs_n(8, 24);
         let t: Vec<f64> = epochs.iter().map(|e| e.years_since(&epochs[0])).collect();
         let d: Vec<f64> = t.iter().map(|&ti| -0.05 * ti).collect();
         let mut series = series_1px(&epochs, &d);
-        series.data[[3, 0, 0]] = f32::NAN;
+        for e in [1, 3, 5, 7] {
+            series.data[[e, 0, 0]] = f32::NAN;
+        }
 
         let f = extract_features(&series, None, &cfg()).unwrap();
         assert!(f.velocity[[0, 0]].is_nan());
         assert!(f.velocity_std[[0, 0]].is_nan());
-        assert!(f.acceleration[[0, 0]].is_nan());
         assert!(f.linearity_r2[[0, 0]].is_nan());
-        assert!(f.residual_rms[[0, 0]].is_nan());
         assert!(f.cumulative[[0, 0]].is_nan());
-        assert!(f.seasonal_amplitude[[0, 0]].is_nan());
-        assert!(f.seasonal_phase[[0, 0]].is_nan());
         assert!(f.max_step[[0, 0]].is_nan());
     }
 
@@ -563,7 +670,9 @@ mod tests {
 
     #[test]
     fn to_table_excluye_nan_y_aplica_mascara() {
-        // Grilla 1×2: píxel (0,0) válido lineal, píxel (0,1) con un NaN.
+        // Grilla 1×2: píxel (0,0) válido lineal; píxel (0,1) con solo 4
+        // épocas finitas < max(min_valid=5, n_coef=5) → queda NaN y fuera
+        // de la tabla.
         let epochs = epochs_n(8, 24);
         let t: Vec<f64> = epochs.iter().map(|e| e.years_since(&epochs[0])).collect();
         let n = epochs.len();
@@ -572,7 +681,9 @@ mod tests {
             data[[e, 0, 0]] = (-0.05 * t[e]) as f32;
             data[[e, 0, 1]] = (0.02 * t[e]) as f32;
         }
-        data[[3, 0, 1]] = f32::NAN; // píxel (0,1) inválido
+        for e in [1, 3, 5, 7] {
+            data[[e, 0, 1]] = f32::NAN; // píxel (0,1) bajo el umbral
+        }
         let series = DisplacementSeries { data, epochs, meta: meta() };
 
         let f = extract_features(&series, None, &cfg()).unwrap();
@@ -616,6 +727,29 @@ mod tests {
         let f2 = extract_features(&series, Some(&coh), &config).unwrap();
         assert!(f2.feature_names().contains(&"temporal_coherence"));
         assert!(f2.temporal_coherence.is_some());
+    }
+
+    #[test]
+    fn esquema_de_tabla_depende_de_la_config_no_de_los_datos() {
+        // Serie 100% NaN: los mapas opcionales quedan todo-NaN, pero el
+        // esquema (columnas) sigue definido por la config — dos corridas con
+        // la misma config son intercambiables para un modelo ML entrenado.
+        let epochs = epochs_n(8, 24);
+        let n = epochs.len();
+        let data = Array3::<f32>::from_elem((n, 1, 1), f32::NAN);
+        let series = DisplacementSeries { data, epochs, meta: meta() };
+
+        let f = extract_features(&series, None, &cfg()).unwrap();
+        let names = f.feature_names();
+        assert!(names.contains(&"acceleration"), "esquema estable con datos vacíos");
+        assert!(names.contains(&"seasonal_amplitude"));
+        assert!(names.contains(&"seasonal_phase"));
+        // La tabla queda vacía pero con el número de columnas del esquema.
+        let (table, coords, tnames) = f.to_table(None);
+        assert_eq!(table.nrows(), 0);
+        assert_eq!(table.ncols(), tnames.len());
+        assert_eq!(tnames, names);
+        assert!(coords.is_empty());
     }
 
     #[test]

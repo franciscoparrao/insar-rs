@@ -14,9 +14,10 @@
 use chrono::NaiveDate;
 use ndarray::{Array3, Axis};
 use numpy::{IntoPyArray, PyArray2, PyArray3, PyReadonlyArray3};
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyIOError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 
+use insar_core::InsarError;
 use insar_core::inversion::{estimate_velocity as core_velocity, invert_sbas as core_invert};
 use insar_core::io::isce::{IsceLoadConfig, read_isce_coherence, read_isce_unwrapped_stack};
 use insar_core::ps::amplitude_dispersion as core_ad;
@@ -25,8 +26,18 @@ use insar_core::types::{
     UnwrappedStack, VelocityMap,
 };
 
-fn err<E: std::fmt::Display>(e: E) -> PyErr {
-    PyValueError::new_err(e.to_string())
+/// Mapea [`InsarError`] a la excepción Python idiomática: fallas de archivo
+/// → `IOError` (capturable con `except OSError`), fallas numéricas →
+/// `RuntimeError`, y datos/parámetros inválidos → `ValueError`.
+fn err(e: InsarError) -> PyErr {
+    match &e {
+        InsarError::Io(_) | InsarError::Raster(_) => PyIOError::new_err(e.to_string()),
+        InsarError::Inversion(_) => PyRuntimeError::new_err(e.to_string()),
+        InsarError::DimensionMismatch(_)
+        | InsarError::InvalidNetwork(_)
+        | InsarError::Metadata(_)
+        | InsarError::UnsupportedFormat(_) => PyValueError::new_err(e.to_string()),
+    }
 }
 
 /// Fecha base arbitraria; solo importan las diferencias (years_since).
@@ -82,7 +93,9 @@ fn invert_sbas<'py>(
         pairs,
         meta: dummy_meta(wavelength_m, 39.0),
     };
-    let series = core_invert(&stack, None).map_err(err)?;
+    // La entrada ya es owned: el cómputo corre sin el GIL (otros threads
+    // Python siguen vivos mientras rayon trabaja).
+    let series = py.allow_threads(|| core_invert(&stack, None)).map_err(err)?;
     Ok(series.data.into_pyarray_bound(py))
 }
 
@@ -105,7 +118,7 @@ fn estimate_velocity<'py>(
         epochs: epoch_days.iter().map(|&d| epoch_from_day(d)).collect(),
         meta: dummy_meta(SENTINEL1_WAVELENGTH_M, 39.0),
     };
-    let vel: VelocityMap = core_velocity(&ds).map_err(err)?;
+    let vel: VelocityMap = py.allow_threads(|| core_velocity(&ds)).map_err(err)?;
     Ok(vel.data.into_pyarray_bound(py))
 }
 
@@ -123,7 +136,7 @@ fn amplitude_dispersion<'py>(
         epochs: (0..n as i64).map(epoch_from_day).collect(),
         meta: dummy_meta(SENTINEL1_WAVELENGTH_M, 39.0),
     };
-    let disp = core_ad(&stack).map_err(err)?;
+    let disp = py.allow_threads(|| core_ad(&stack)).map_err(err)?;
     Ok(disp.into_pyarray_bound(py))
 }
 
@@ -146,7 +159,9 @@ fn estimate_velocity_uncertainty<'py>(
         epochs: epoch_days.iter().map(|&d| epoch_from_day(d)).collect(),
         meta: dummy_meta(SENTINEL1_WAVELENGTH_M, 39.0),
     };
-    let se = insar_core::inversion::estimate_velocity_uncertainty(&ds).map_err(err)?;
+    let se = py
+        .allow_threads(|| insar_core::inversion::estimate_velocity_uncertainty(&ds))
+        .map_err(err)?;
     Ok(se.into_pyarray_bound(py))
 }
 
@@ -164,6 +179,18 @@ fn temporal_coherence<'py>(
     epoch_days: Vec<i64>,
     wavelength_m: f64,
 ) -> PyResult<Bound<'py, PyArray2<f32>>> {
+    // Misma validación temprana que invert_sbas: sin ella, zip trunca en
+    // silencio al vector más corto.
+    if refs.len() != secs.len() || refs.len() != phase.as_array().len_of(Axis(0)) {
+        return Err(PyValueError::new_err(
+            "refs, secs y el eje 0 de phase deben tener la misma longitud",
+        ));
+    }
+    if epoch_days.len() != series.as_array().len_of(Axis(0)) {
+        return Err(PyValueError::new_err(
+            "epoch_days debe tener tantas entradas como el eje 0 de series",
+        ));
+    }
     let pairs: Vec<IfgPair> = refs
         .iter()
         .zip(&secs)
@@ -181,7 +208,9 @@ fn temporal_coherence<'py>(
         epochs,
         meta: dummy_meta(wavelength_m, 39.0),
     };
-    let gamma = insar_core::inversion::temporal_coherence(&stack, &ds).map_err(err)?;
+    let gamma = py
+        .allow_threads(|| insar_core::inversion::temporal_coherence(&stack, &ds))
+        .map_err(err)?;
     Ok(gamma.into_pyarray_bound(py))
 }
 
@@ -216,44 +245,32 @@ fn sbas_from_isce<'py>(
         incidence_deg,
         ..Default::default()
     };
-    let dir = std::path::Path::new(&ifg_dir);
-    let mut stack = read_isce_unwrapped_stack(dir, &config).map_err(err)?;
-    let epochs: Vec<String> = stack.epochs.iter().map(|e| e.0.to_string()).collect();
+    // Todo el trabajo pesado (I/O de disco de cientos de pares + inversión)
+    // corre SIN el GIL: otros threads Python siguen vivos mientras tanto.
+    let (velocity, vel_std, series, gamma, epochs) = py
+        .allow_threads(|| -> Result<_, InsarError> {
+            let dir = std::path::Path::new(&ifg_dir);
+            let mut stack = read_isce_unwrapped_stack(dir, &config)?;
+            let epochs: Vec<String> =
+                stack.epochs.iter().map(|e| e.0.to_string()).collect();
 
-    // Referencia espacial al píxel de máxima coherencia media (o el centro).
-    let (n_rows, n_cols) = stack.dims();
-    let (ref_r, ref_c) = match read_isce_coherence(dir, &config) {
-        Ok(coh) => {
-            let n_pairs = coh.shape()[0];
-            let mut best = (n_rows / 2, n_cols / 2, f32::MIN);
-            for r in 0..n_rows {
-                for c in 0..n_cols {
-                    let (mut sum, mut n) = (0.0_f64, 0u32);
-                    for k in 0..n_pairs {
-                        let v = coh[[k, r, c]];
-                        if v.is_finite() {
-                            sum += v as f64;
-                            n += 1;
-                        }
-                    }
-                    if n > 0 {
-                        let mean = (sum / n as f64) as f32;
-                        if mean > best.2 {
-                            best = (r, c, mean);
-                        }
-                    }
-                }
-            }
-            (best.0, best.1)
-        }
-        Err(_) => (n_rows / 2, n_cols / 2),
-    };
-    insar_core::inversion::reference_to_pixel(&mut stack, ref_r, ref_c).map_err(err)?;
+            // Referencia espacial al píxel de máxima coherencia media (o el
+            // centro). La selección vive en el core (compartida con la CLI y
+            // el pipeline).
+            let (n_rows, n_cols) = stack.dims();
+            let (ref_r, ref_c) = read_isce_coherence(dir, &config)
+                .ok()
+                .and_then(|coh| insar_core::inversion::select_reference_pixel(&coh))
+                .unwrap_or((n_rows / 2, n_cols / 2));
+            insar_core::inversion::reference_to_pixel(&mut stack, ref_r, ref_c)?;
 
-    let series = core_invert(&stack, None).map_err(err)?;
-    let velocity = core_velocity(&series).map_err(err)?;
-    let vel_std = insar_core::inversion::estimate_velocity_uncertainty(&series).map_err(err)?;
-    let gamma = insar_core::inversion::temporal_coherence(&stack, &series).map_err(err)?;
+            let series = core_invert(&stack, None)?;
+            let velocity = core_velocity(&series)?;
+            let vel_std = insar_core::inversion::estimate_velocity_uncertainty(&series)?;
+            let gamma = insar_core::inversion::temporal_coherence(&stack, &series)?;
+            Ok((velocity, vel_std, series, gamma, epochs))
+        })
+        .map_err(err)?;
     Ok((
         velocity.data.into_pyarray_bound(py),
         vel_std.into_pyarray_bound(py),

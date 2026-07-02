@@ -6,16 +6,19 @@
 //! Modelo: el APS está correlado en espacio y descorrelado en tiempo, mientras
 //! que la deformación es suave en el tiempo. Por eso:
 //!
-//! 1. **Pasa-alto temporal**: por píxel, `hp[e] = serie[e] − media_móvil(e)`,
-//!    con ventana centrada de [`ApsConfig::temporal_window_epochs`] épocas.
-//!    El truncamiento en los bordes es **simétrico**: el semiancho efectivo en
-//!    la época `e` es `min(w/2, e, n−1−e)`, de modo que la ventana siempre
-//!    queda centrada en `e`. Así una señal lineal en el tiempo (con épocas
-//!    equiespaciadas) tiene pasa-alto exactamente cero también en los bordes
-//!    y no se confunde con atmósfera. Si la ventana es ≥ n_épocas se usa la
-//!    media global de la serie del píxel (la media móvil degenera en eso);
-//!    en ese caso una tendencia lineal SÍ deja residuo en el pasa-alto, por
-//!    lo que se recomienda ventana < n_épocas.
+//! 1. **Pasa-alto temporal**: por píxel, `hp[e] = serie[e] − fit(e)`, donde
+//!    `fit(e)` es el valor en `t_e` del **ajuste lineal local en tiempo real**
+//!    (años decimales de [`crate::types::Epoch`]) sobre la ventana centrada de
+//!    [`ApsConfig::temporal_window_epochs`] épocas. El truncamiento en los
+//!    bordes es **simétrico en índice**: el semiancho efectivo en la época `e`
+//!    es `min(w/2, e, n−1−e)`. Con épocas equiespaciadas el ajuste evaluado en
+//!    el centro coincide **exactamente** con la media móvil centrada clásica;
+//!    con muestreo irregular (gaps de Sentinel-1: 12→24→48 días, huecos de
+//!    invierno) el ajuste pondera por el tiempo real de adquisición, de modo
+//!    que una señal lineal en el tiempo tiene pasa-alto exactamente cero
+//!    también en los bordes y en los huecos, y no se confunde con atmósfera.
+//!    Si la ventana es ≥ n_épocas se usa el ajuste lineal global de la serie
+//!    del píxel (mismo criterio: una tendencia lineal pasa intacta).
 //! 2. **Pasa-bajo espacial**: por época, filtro gaussiano 2D separable con
 //!    sigma [`ApsConfig::spatial_sigma_px`] y radio `ceil(3σ)`, normalizado
 //!    por los pesos válidos (convolución normalizada): los NaN no aportan ni
@@ -32,14 +35,16 @@ use ndarray::{Array2, Array3, ArrayView2, Axis, Zip};
 use rayon::prelude::*;
 
 use crate::error::{InsarError, Result};
-use crate::types::DisplacementSeries;
+use crate::types::{DisplacementSeries, Epoch};
 
 /// Parámetros del filtro espacio-temporal.
 #[derive(Debug, Clone)]
 pub struct ApsConfig {
     /// Sigma del filtro gaussiano espacial, en píxeles.
     pub spatial_sigma_px: f32,
-    /// Ventana de la media móvil temporal, en épocas (impar).
+    /// Ventana del ajuste lineal local temporal, en épocas (impar). El fit
+    /// dentro de la ventana usa las fechas reales de adquisición (ver doc del
+    /// módulo); con épocas equiespaciadas equivale a la media móvil clásica.
     pub temporal_window_epochs: usize,
 }
 
@@ -72,12 +77,19 @@ pub fn correct_aps(series: &mut DisplacementSeries, config: &ApsConfig) -> Resul
 
     let n_epochs = series.n_layers();
     let (rows, cols) = series.dims();
+    if series.epochs.len() != n_epochs {
+        return Err(InsarError::DimensionMismatch(format!(
+            "{} épocas declaradas vs {n_epochs} capas en la serie",
+            series.epochs.len()
+        )));
+    }
     if n_epochs == 0 || rows == 0 || cols == 0 {
         return Ok(());
     }
 
-    // 1) Componente pasa-alto temporal por píxel.
-    let hp = temporal_high_pass(&series.data, window);
+    // 1) Componente pasa-alto temporal por píxel (ajuste lineal local en
+    //    tiempo real: robusto a muestreo irregular, ver doc del módulo).
+    let hp = temporal_high_pass(&series.data, window, &series.epochs);
 
     // 2) APS por época: pasa-bajo espacial gaussiano con normalización por
     //    pesos válidos. Paralelo por época.
@@ -101,20 +113,61 @@ pub fn correct_aps(series: &mut DisplacementSeries, config: &ApsConfig) -> Resul
     Ok(())
 }
 
-/// Pasa-alto temporal: `serie − media móvil centrada` por píxel, en f64.
+/// Pasa-alto temporal: `serie − ajuste lineal local en tiempo real` por
+/// píxel, en f64.
 ///
-/// - Ventana truncada simétricamente en los bordes (semiancho efectivo
-///   `min(half, e, n−1−e)`): en la primera y última época la ventana degenera
-///   al propio valor y el pasa-alto es 0 (no se estima APS ahí, decisión
-///   conservadora que evita confundir tendencia con atmósfera).
-/// - `window >= n` → media global del píxel.
+/// El valor filtrado de la época `e` es el del ajuste por mínimos cuadrados
+/// `d ~ a + b·t` sobre la ventana, evaluado en `t_e`. Como el fit es una
+/// combinación lineal de los valores de la ventana, se precomputan los pesos
+/// por época (dependen solo de las fechas): `w_i = 1/m + (t_e−t̄)(t_i−t̄)/Sxx`.
+/// Con épocas equiespaciadas `t̄ = t_e` y los pesos degeneran a la media
+/// móvil clásica (`w_i = 1/m`); con muestreo irregular el término de
+/// pendiente corrige la asimetría temporal de la ventana, garantizando que
+/// una señal lineal en el tiempo tenga pasa-alto exactamente cero.
+///
+/// - Ventana truncada simétricamente en índice en los bordes (semiancho
+///   efectivo `min(half, e, n−1−e)`): en la primera y última época la ventana
+///   degenera al propio valor y el pasa-alto es 0 (no se estima APS ahí,
+///   decisión conservadora que evita confundir tendencia con atmósfera).
+/// - `window >= n` → ajuste lineal global del píxel.
+/// - Fechas idénticas en la ventana (`Sxx = 0`) → media simple (fallback).
 /// - Cualquier NaN en la serie del píxel → NaN en todas sus épocas.
-fn temporal_high_pass(data: &Array3<f32>, window: usize) -> Array3<f32> {
+fn temporal_high_pass(data: &Array3<f32>, window: usize, epochs: &[Epoch]) -> Array3<f32> {
     let n = data.shape()[0];
     let (rows, cols) = (data.shape()[1], data.shape()[2]);
     let mut hp = Array3::<f32>::zeros((n, rows, cols));
     let half = window / 2;
     let global = window >= n;
+
+    // Tiempo real en años decimales relativo a la primera época.
+    let t: Vec<f64> = epochs.iter().map(|e| e.years_since(&epochs[0])).collect();
+
+    // Pesos del fit lineal local por época: (lo, w[0..m]) tales que
+    // fit(e) = Σ_i w[i]·d[lo+i]. Dependen solo de las fechas → una vez.
+    let weights: Vec<(usize, Vec<f64>)> = (0..n)
+        .map(|e| {
+            let (lo, hi) = if global {
+                (0, n - 1)
+            } else {
+                let k = half.min(e).min(n - 1 - e);
+                (e - k, e + k)
+            };
+            let m = hi - lo + 1;
+            let t_mean = t[lo..=hi].iter().sum::<f64>() / m as f64;
+            let sxx: f64 = t[lo..=hi].iter().map(|&ti| (ti - t_mean).powi(2)).sum();
+            let w = (lo..=hi)
+                .map(|i| {
+                    let uniform = 1.0 / m as f64;
+                    if sxx > 0.0 {
+                        uniform + (t[e] - t_mean) * (t[i] - t_mean) / sxx
+                    } else {
+                        uniform
+                    }
+                })
+                .collect();
+            (lo, w)
+        })
+        .collect();
 
     Zip::from(hp.lanes_mut(Axis(0)))
         .and(data.lanes(Axis(0)))
@@ -123,23 +176,14 @@ fn temporal_high_pass(data: &Array3<f32>, window: usize) -> Array3<f32> {
                 hp_px.fill(f32::NAN);
                 return;
             }
-            if global {
-                let mean = px.iter().map(|&v| f64::from(v)).sum::<f64>() / n as f64;
-                for (h, &v) in hp_px.iter_mut().zip(px.iter()) {
-                    *h = (f64::from(v) - mean) as f32;
-                }
-                return;
-            }
-            // Sumas acumuladas para media móvil O(n).
-            let mut prefix = vec![0.0f64; n + 1];
-            for (e, &v) in px.iter().enumerate() {
-                prefix[e + 1] = prefix[e] + f64::from(v);
-            }
             for e in 0..n {
-                let k = half.min(e).min(n - 1 - e);
-                let (lo, hi) = (e - k, e + k);
-                let mean = (prefix[hi + 1] - prefix[lo]) / (hi - lo + 1) as f64;
-                hp_px[e] = (f64::from(px[e]) - mean) as f32;
+                let (lo, w) = &weights[e];
+                let fit: f64 = w
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &wi)| wi * f64::from(px[lo + i]))
+                    .sum();
+                hp_px[e] = (f64::from(px[e]) - fit) as f32;
             }
         });
 
@@ -422,22 +466,112 @@ mod tests {
     }
 
     #[test]
-    fn ventana_mayor_que_serie_usa_media_global() {
-        // window >= n_épocas → media global. Una serie constante en el tiempo
-        // tiene media global = valor → APS = 0 → sin cambios.
+    fn ventana_mayor_que_serie_usa_ajuste_global() {
+        // window >= n_épocas → ajuste lineal global. Una serie constante en el
+        // tiempo tiene fit = valor → APS = 0 → sin cambios; y una tendencia
+        // lineal también pasa intacta (mejora sobre la media global clásica).
         let (n, rows, cols) = (5, 8, 8);
-        let data = Array3::from_shape_fn((n, rows, cols), |(_, r, c)| {
+        let constant = Array3::from_shape_fn((n, rows, cols), |(_, r, c)| {
             0.01 * (r as f32 - c as f32)
         });
-        let mut s = series_from(data.clone());
-        let cfg = ApsConfig { spatial_sigma_px: 1.5, temporal_window_epochs: 7 };
+        let linear = linear_deformation(n, rows, cols);
+        for data in [constant, linear] {
+            let mut s = series_from(data.clone());
+            let cfg = ApsConfig { spatial_sigma_px: 1.5, temporal_window_epochs: 7 };
+            correct_aps(&mut s, &cfg).unwrap();
+            let max_diff = s
+                .data
+                .iter()
+                .zip(data.iter())
+                .map(|(&a, &b)| (f64::from(a) - f64::from(b)).abs())
+                .fold(0.0_f64, f64::max);
+            assert!(max_diff < 1e-6, "serie sin componente APS alterada: {max_diff}");
+        }
+    }
+
+    // ---------- muestreo temporal irregular (gaps de Sentinel-1) ----------
+
+    /// Épocas con hueco grande: 12 días entre adquisiciones, pero un gap de
+    /// 120 días en la mitad de la serie (p. ej. invierno sin datos).
+    fn epochs_with_gap(n: usize, gap_after: usize) -> Vec<Epoch> {
+        let start = NaiveDate::from_ymd_opt(2023, 1, 1).unwrap();
+        let mut days = 0_i64;
+        (0..n)
+            .map(|i| {
+                if i > 0 {
+                    days += if i == gap_after + 1 { 120 } else { 12 };
+                }
+                Epoch(start + chrono::Duration::days(days))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn deformacion_lineal_pasa_intacta_con_gaps() {
+        // Con muestreo irregular, la media móvil por índice confunde una
+        // tendencia lineal con atmósfera alrededor del gap; el ajuste lineal
+        // en tiempo real la deja pasar exactamente.
+        let (n, rows, cols) = (9, 16, 16);
+        let epochs = epochs_with_gap(n, 4);
+        let t: Vec<f64> = epochs.iter().map(|e| e.years_since(&epochs[0])).collect();
+        // Deformación lineal en TIEMPO REAL: d[e](r,c) = rate(r,c) · t_e.
+        let truth = Array3::from_shape_fn((n, rows, cols), |(e, r, c)| {
+            let rate = 0.02 * (r as f32 + c as f32); // m/año
+            rate * t[e] as f32
+        });
+        let mut s = DisplacementSeries { data: truth.clone(), epochs, meta: meta() };
+        let cfg = ApsConfig { spatial_sigma_px: 2.0, temporal_window_epochs: 5 };
         correct_aps(&mut s, &cfg).unwrap();
         let max_diff = s
             .data
             .iter()
-            .zip(data.iter())
+            .zip(truth.iter())
             .map(|(&a, &b)| (f64::from(a) - f64::from(b)).abs())
             .fold(0.0_f64, f64::max);
-        assert!(max_diff < 1e-7, "serie constante en el tiempo alterada: {max_diff}");
+        assert!(
+            max_diff < 1e-6,
+            "deformación lineal alterada con muestreo irregular: max_diff={max_diff}"
+        );
+    }
+
+    #[test]
+    fn artefacto_junto_al_gap_se_atenua() {
+        // El artefacto de una época adyacente al gap también debe atenuarse
+        // (el filtro no pierde capacidad de corrección por el hueco).
+        let (n, rows, cols, gap_after) = (9, 24, 24, 4);
+        let e_art = gap_after; // época justo antes del hueco
+        let epochs = epochs_with_gap(n, gap_after);
+        let t: Vec<f64> = epochs.iter().map(|e| e.years_since(&epochs[0])).collect();
+        let truth = Array3::from_shape_fn((n, rows, cols), |(e, r, c)| {
+            let rate = 0.02 * (r as f32 + c as f32);
+            rate * t[e] as f32
+        });
+        let mut data = truth.clone();
+        let art = smooth_artifact(rows, cols);
+        data.index_axis_mut(Axis(0), e_art)
+            .zip_mut_with(&art, |d, &a| *d += a);
+
+        let before = rms_residual(&data, &truth, e_art);
+        let mut s = DisplacementSeries { data, epochs, meta: meta() };
+        let cfg = ApsConfig { spatial_sigma_px: 2.0, temporal_window_epochs: 7 };
+        correct_aps(&mut s, &cfg).unwrap();
+        let after = rms_residual(&s.data, &truth, e_art);
+
+        assert!(
+            after * 3.0 <= before,
+            "atenuación insuficiente junto al gap: antes={before:.6}, después={after:.6}"
+        );
+    }
+
+    #[test]
+    fn serie_epocas_inconsistentes_es_error() {
+        // Capas ≠ épocas declaradas → error claro, no panic ni resultado basura.
+        let mut s = series_from(linear_deformation(5, 4, 4));
+        s.epochs.pop();
+        let cfg = ApsConfig::default();
+        assert!(matches!(
+            correct_aps(&mut s, &cfg).unwrap_err(),
+            InsarError::DimensionMismatch(_)
+        ));
     }
 }

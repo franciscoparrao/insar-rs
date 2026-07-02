@@ -65,8 +65,11 @@ fn main() {
 
     // Corrección de errores de desenrollado (saltos 2π entre componentes
     // conexas de cada GUNW) por cierre de fase de la red SBAS.
-    let n_corr = insar_core::unwrap_error::correct_unwrap_errors(&mut stack).unwrap();
-    println!("errores de desenrollado corregidos: {n_corr} píxeles");
+    let rep = insar_core::unwrap_error::correct_unwrap_errors(&mut stack).unwrap();
+    println!(
+        "errores de desenrollado: {} píxeles corregidos, {} detectados sin corregir",
+        rep.corrected, rep.detected_uncorrected
+    );
 
     // Píxel de referencia: el de mayor COBERTURA (presente en más pares, para
     // no anular interferogramas al referenciar) y, a igualdad, mayor coherencia.

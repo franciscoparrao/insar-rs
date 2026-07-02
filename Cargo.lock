@@ -558,6 +558,8 @@ dependencies = [
  "anyhow",
  "clap",
  "insar-core",
+ "ndarray",
+ "surtgis-core",
 ]
 
 [[package]]
@@ -577,7 +579,7 @@ dependencies = [
  "serde_json",
  "smelt-ml",
  "surtgis-core",
- "swarm-core",
+ "swarm-abm",
  "thiserror",
 ]
 
@@ -1246,7 +1248,9 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "surtgis-core"
-version = "0.16.2"
+version = "0.16.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "67097f61a895842785552bde039613df2a466e73642f94dbfc4c02eecc47686c"
 dependencies = [
  "anyhow",
  "geo",
@@ -1262,12 +1266,22 @@ dependencies = [
 ]
 
 [[package]]
-name = "swarm-core"
+name = "swarm-abm"
 version = "0.3.0"
 dependencies = [
  "rand",
  "rand_chacha",
  "rayon",
+ "swarm-abm-derive",
+]
+
+[[package]]
+name = "swarm-abm-derive"
+version = "0.3.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

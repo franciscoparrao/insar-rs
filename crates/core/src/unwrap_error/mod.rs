@@ -9,11 +9,14 @@
 //! ciclo lo lleva a un múltiplo entero de 2π.
 //!
 //! Usando los lazos de cierre de la red SBAS se estima, por par y píxel, el
-//! entero de corrección U que minimiza la inconsistencia de cierre, y se
-//! corrige la fase: `φ' = φ − 2π·U`. No requiere adyacencia espacial entre
+//! entero de corrección U que minimiza la inconsistencia de cierre, se
+//! **verifica** que aplicarlo reduzca efectivamente los cierres (en redes de
+//! baja redundancia la solución L2 redondeada puede ser nula: esos píxeles se
+//! reportan como detectados-sin-corregir, ver [`UnwrapCorrectionReport`]) y
+//! se corrige la fase: `φ' = φ − 2π·U`. No requiere adyacencia espacial entre
 //! componentes — solo la redundancia temporal de la red.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::f64::consts::PI;
 
 use nalgebra::{DMatrix, DVector};
@@ -88,15 +91,116 @@ pub fn build_closure_loops(pairs: &[IfgPair]) -> ClosureLoops {
     ClosureLoops { matrix, loops }
 }
 
+/// Nº de lazos de cierre con ambigüedad entera ≠ 0 por píxel — el producto de
+/// QC estándar de errores de desenrollado (equivalente a
+/// `numTriNonzeroIntAmbiguity` de MintPy, Yunjun et al. 2019). Un píxel con
+/// conteo > 0 tiene al menos un salto de ciclo entre sus pares; sirve como
+/// máscara de calidad antes/después de [`correct_unwrap_errors`].
+///
+/// Solo se evalúan los lazos **activos** (los 3 pares con fase finita); un
+/// píxel sin ningún lazo activo queda NaN (sin información de cierre, no
+/// "cierre perfecto"). Error si el stack es inválido.
+pub fn nonzero_closure_count(stack: &UnwrappedStack) -> Result<Array2<f32>> {
+    stack.validate()?;
+    let n_pairs = stack.n_layers();
+    let (n_rows, n_cols) = stack.dims();
+
+    let closure = build_closure_loops(&stack.pairs);
+    let loops = &closure.loops;
+    let phases = stack.data.view();
+
+    let mut out = Array2::<f32>::from_elem((n_rows, n_cols), f32::NAN);
+    let mut row_views: Vec<_> = out.axis_iter_mut(Axis(0)).collect();
+    row_views.par_iter_mut().enumerate().for_each(|(r, out_row)| {
+        let mut phi = vec![0.0_f64; n_pairs];
+        let mut finite = vec![false; n_pairs];
+        for c in 0..n_cols {
+            for k in 0..n_pairs {
+                let v = phases[[k, r, c]];
+                finite[k] = v.is_finite();
+                phi[k] = if finite[k] { v as f64 } else { 0.0 };
+            }
+            let mut active = 0usize;
+            let mut nonzero = 0usize;
+            for &[ab, bc, ac] in loops {
+                if finite[ab] && finite[bc] && finite[ac] {
+                    active += 1;
+                    if ((phi[ab] + phi[bc] - phi[ac]) / TWO_PI).round() != 0.0 {
+                        nonzero += 1;
+                    }
+                }
+            }
+            if active > 0 {
+                out_row[c] = nonzero as f32;
+            }
+        }
+    });
+
+    Ok(out)
+}
+
+/// Resultado de [`correct_unwrap_errors`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct UnwrapCorrectionReport {
+    /// Píxeles donde la corrección redujo la inconsistencia de cierre y se
+    /// aplicó al stack.
+    pub corrected: usize,
+    /// Píxeles con cierre ≠ 0 detectado cuya corrección L2-redondeada NO
+    /// redujo la inconsistencia: se dejaron **intactos**. Es el caso típico
+    /// de redes de baja redundancia (pares en 1-2 lazos), donde la solución
+    /// de norma mínima reparte el salto en fracciones que redondean a cero.
+    /// Un valor alto indica que la red no puede localizar los saltos: esos
+    /// píxeles deben enmascararse (p. ej. vía coherencia temporal) o la red
+    /// densificarse.
+    pub detected_uncorrected: usize,
+}
+
+/// Solver de corrección para un patrón de pares finitos: índices de los lazos
+/// activos (los 3 pares finitos) y pseudoinversa de la matriz de lazos
+/// restringida a esas filas.
+type MaskSolver = Option<(Vec<usize>, DMatrix<f64>)>;
+
+/// Pseudoinversa L2 de la matriz de lazos restringida a `active` (filas).
+/// `None` si no hay lazos activos o la SVD falla (sin corrección fiable).
+fn closure_pinv(matrix: &Array2<f64>, active: &[usize], n_pairs: usize) -> MaskSolver {
+    if active.is_empty() {
+        return None;
+    }
+    let c_mat = DMatrix::<f64>::from_fn(active.len(), n_pairs, |i, j| matrix[[active[i], j]]);
+    let svd = c_mat.svd(true, true);
+    // Tolerancia estilo rcond de numpy/LAPACK: σ_max · max(m,n) · ε_f64
+    // (idéntica a la usada en la inversión SBAS).
+    let s_max = svd.singular_values.iter().copied().fold(0.0_f64, f64::max);
+    let eps = s_max * (active.len().max(n_pairs) as f64) * f64::EPSILON;
+    svd.pseudo_inverse(eps).ok().map(|p| (active.to_vec(), p))
+}
+
 /// Corrige los errores de desenrollado del stack in situ por cierre de fase.
 ///
 /// Para cada píxel calcula el cierre entero `n = round(closure / 2π)` de cada
-/// lazo; si todos son 0 no hay error. Si no, resuelve el entero de corrección
-/// por par (solución de norma mínima, redondeada) y aplica `φ −= 2π·U`.
-/// Los pares no finitos en un píxel se excluyen de sus lazos.
+/// lazo **activo** (los 3 pares con fase finita); si todos son 0 no hay
+/// error. Si no, resuelve el entero de corrección por par (solución de norma
+/// mínima L2 sobre los lazos activos, redondeada) y **verifica** que la
+/// corrección reduzca la inconsistencia total de cierre (`Σ|n_l|`) antes de
+/// aplicar `φ −= 2π·U`:
 ///
-/// Devuelve el número de píxeles corregidos.
-pub fn correct_unwrap_errors(stack: &mut UnwrappedStack) -> Result<usize> {
+/// - Si la reduce → se aplica (cuenta en `corrected`).
+/// - Si no (típico de redes ralas: la solución fraccional redondea a 0) → el
+///   píxel queda intacto y cuenta en `detected_uncorrected`. Sin esta
+///   verificación la corrección sería silenciosamente nula: el cierre se
+///   detectaría pero nada cambiaría, sin señal al caller.
+///
+/// Los pares no finitos de un píxel excluyen sus lazos de la estimación (la
+/// pseudoinversa se recalcula por patrón de pares finitos y se cachea, igual
+/// que en `invert_sbas`): un lazo sin dato es ausencia de información, no un
+/// "cierre perfecto".
+///
+/// Nota: U es la solución L2 redondeada a enteros. La solución entera L1
+/// (p. ej. ILP) sería más robusta a outliers de cierre — es la recomendación
+/// de Yunjun et al. (2019) y queda como mejora futura; la verificación de
+/// efectividad de arriba acota el daño de la aproximación L2.
+pub fn correct_unwrap_errors(stack: &mut UnwrappedStack) -> Result<UnwrapCorrectionReport> {
+    stack.validate()?;
     let n_pairs = stack.n_layers();
 
     let closure = build_closure_loops(&stack.pairs);
@@ -104,102 +208,156 @@ pub fn correct_unwrap_errors(stack: &mut UnwrappedStack) -> Result<usize> {
 
     // Sin redundancia temporal no hay cierres que evaluar: nada que corregir.
     if n_loops == 0 {
-        return Ok(0);
+        return Ok(UnwrapCorrectionReport::default());
     }
 
-    // Pseudoinversa L2 de la matriz de lazos C (n_lazos × n_pares). `pinv` es
-    // (n_pares × n_lazos) y entrega la solución de norma mínima U = pinv·n_int
-    // del sistema sobre-/sub-determinado C·U = n_int. Se calcula UNA vez (la
-    // SVD es el costo dominante) y se reutiliza en todos los píxeles.
-    //
-    // Nota: U es la solución L2 redondeada a enteros. La solución L1 (entera,
-    // p. ej. programación lineal) sería más robusta a outliers de cierre, pero
-    // esta L2 redondeada es un buen primer orden — el enfoque clásico de
-    // Yunjun et al. (2019) para corrección de errores de desenrollado.
-    let c_mat = DMatrix::<f64>::from_fn(n_loops, n_pairs, |i, j| closure.matrix[[i, j]]);
-    let svd = c_mat.svd(true, true);
-    // Tolerancia estilo rcond de numpy/LAPACK: σ_max · max(m,n) · ε_f64
-    // (idéntica a la usada en la inversión SBAS).
-    let s_max = svd.singular_values.iter().copied().fold(0.0_f64, f64::max);
-    let eps = s_max * (n_loops.max(n_pairs) as f64) * f64::EPSILON;
-    let pinv = match svd.pseudo_inverse(eps) {
-        Ok(p) => p,
+    let loops = &closure.loops;
+    let phases = stack.data.view();
+
+    // Camino rápido (todos los pares finitos): todos los lazos activos.
+    let full_active: Vec<usize> = (0..n_loops).collect();
+    let Some((_, full_pinv)) = closure_pinv(&closure.matrix, &full_active, n_pairs) else {
         // C es entera y bien condicionada; si la SVD fallara no hay corrección
-        // fiable que aplicar, así que devolvemos 0 sin tocar el stack.
-        Err(_) => return Ok(0),
+        // fiable que aplicar: stack intacto.
+        return Ok(UnwrapCorrectionReport::default());
     };
 
-    let loops = &closure.loops;
+    // Pasada 1: patrones de pares finitos con al menos un NaN (por fila, en
+    // paralelo) — mismo esquema de máscara en bits que `invert_sbas`.
+    let n_words = n_pairs.div_ceil(64);
+    let mask_bit = |key: &mut [u64], k: usize| key[k / 64] |= 1u64 << (k % 64);
+    let (n_rows, n_cols) = stack.dims();
+    let unique_masks: HashSet<Vec<u64>> = (0..n_rows)
+        .into_par_iter()
+        .map(|r| {
+            let mut set: HashSet<Vec<u64>> = HashSet::new();
+            for c in 0..n_cols {
+                let mut key = vec![0u64; n_words];
+                let mut n_valid = 0usize;
+                for k in 0..n_pairs {
+                    if phases[[k, r, c]].is_finite() {
+                        mask_bit(&mut key, k);
+                        n_valid += 1;
+                    }
+                }
+                if n_valid != n_pairs {
+                    set.insert(key);
+                }
+            }
+            set
+        })
+        .reduce(HashSet::new, |mut a, b| {
+            a.extend(b);
+            a
+        });
 
-    // Paraleliza por filas (igual que `invert_sbas`), reusando buffers por
-    // fila para no reasignar por píxel. El contador por fila se combina con un
-    // map+reduce de rayon (suma).
+    // Pasada 2: solver por patrón (en paralelo): lazos activos = los que
+    // tienen sus 3 pares finitos; pinv restringida a esas filas.
+    let solvers: HashMap<Vec<u64>, MaskSolver> = unique_masks
+        .into_par_iter()
+        .map(|mask| {
+            let is_set = |k: usize| mask[k / 64] & (1u64 << (k % 64)) != 0;
+            let active: Vec<usize> = loops
+                .iter()
+                .enumerate()
+                .filter(|(_, trio)| trio.iter().all(|&k| is_set(k)))
+                .map(|(l, _)| l)
+                .collect();
+            let solver = closure_pinv(&closure.matrix, &active, n_pairs);
+            (mask, solver)
+        })
+        .collect();
+
+    // Pasada 3: corrección por píxel (en paralelo por fila), reusando buffers
+    // por fila. Los contadores se combinan con map+reduce de rayon.
     let mut row_views: Vec<_> = stack.data.axis_iter_mut(Axis(1)).collect();
-    let corrected: usize = row_views
+    let (corrected, detected_uncorrected) = row_views
         .par_iter_mut()
         .map(|row| {
             // Buffers reutilizados a lo largo de toda la fila.
             let mut phi = vec![0.0_f64; n_pairs];
             let mut finite = vec![false; n_pairs];
-            let mut n_int = DVector::<f64>::zeros(n_loops);
-            let mut local = 0usize;
+            let mut key = vec![0u64; n_words];
+            let mut n_buf: Vec<f64> = Vec::with_capacity(n_loops);
+            let mut u_round = vec![0.0_f64; n_pairs];
+            let mut local = (0usize, 0usize);
 
             for c in 0..row.shape()[1] {
-                // (a) Lee las fases del píxel.
+                // (a) Lee las fases del píxel y arma la máscara de finitos.
+                key.iter_mut().for_each(|w| *w = 0);
+                let mut n_valid = 0usize;
                 for k in 0..n_pairs {
                     let v = row[[k, c]];
                     if v.is_finite() {
                         phi[k] = v as f64;
                         finite[k] = true;
+                        mask_bit(&mut key, k);
+                        n_valid += 1;
                     } else {
                         phi[k] = 0.0;
                         finite[k] = false;
                     }
                 }
 
-                // (b) Cierre entero por lazo. Lazos con algún par NaN no aportan
-                // (n_l = 0): se excluyen de la inversión.
-                let mut any_closure = false;
-                for (l, &[ab, bc, ac]) in loops.iter().enumerate() {
-                    let nl = if finite[ab] && finite[bc] && finite[ac] {
-                        let c_l = phi[ab] + phi[bc] - phi[ac];
-                        (c_l / TWO_PI).round()
-                    } else {
-                        0.0
-                    };
-                    n_int[l] = nl;
-                    if nl != 0.0 {
-                        any_closure = true;
+                // (b) Solver según patrón: completo (camino rápido) o cacheado.
+                let (active, pinv) = if n_valid == n_pairs {
+                    (&full_active, &full_pinv)
+                } else {
+                    match solvers.get(&key) {
+                        Some(Some((a, p))) => (a, p),
+                        // Sin lazos activos: no hay información de cierre.
+                        _ => continue,
                     }
+                };
+
+                // (c) Cierre entero por lazo activo.
+                n_buf.clear();
+                let mut sum_abs_old = 0.0_f64;
+                for &l in active {
+                    let [ab, bc, ac] = loops[l];
+                    let nl = ((phi[ab] + phi[bc] - phi[ac]) / TWO_PI).round();
+                    sum_abs_old += nl.abs();
+                    n_buf.push(nl);
                 }
 
-                // (c) Todos los cierres 0 → píxel sin error de desenrollado.
-                if !any_closure {
+                // (d) Todos los cierres 0 → píxel sin error de desenrollado.
+                if sum_abs_old == 0.0 {
                     continue;
                 }
 
-                // (d) U = pinv · n_int, redondeada a enteros (solución L2).
-                let u = &pinv * &n_int;
-
-                // (e) Aplica φ_k −= 2π·U_k en pares con corrección y fase finita.
-                let mut pixel_corrected = false;
+                // (e) U = pinv · n_int, redondeada a enteros (solución L2).
+                let u = pinv * DVector::from_column_slice(&n_buf);
                 for k in 0..n_pairs {
-                    let uk = u[k].round();
-                    if uk != 0.0 && finite[k] {
-                        let new = phi[k] - TWO_PI * uk;
-                        row[[k, c]] = new as f32;
-                        pixel_corrected = true;
+                    u_round[k] = u[k].round();
+                }
+
+                // (f) Verificación: la corrección aplica φ −= 2π·U, así que el
+                // cierre de cada lazo activo pasa a n_l − (C·U)_l. Si Σ|·| no
+                // baja, la corrección no mejora nada → píxel intacto.
+                let mut sum_abs_new = 0.0_f64;
+                for (i, &l) in active.iter().enumerate() {
+                    let [ab, bc, ac] = loops[l];
+                    let delta = u_round[ab] + u_round[bc] - u_round[ac];
+                    sum_abs_new += (n_buf[i] - delta).abs();
+                }
+                if sum_abs_new >= sum_abs_old {
+                    local.1 += 1; // detectado pero no corregible con esta red
+                    continue;
+                }
+
+                // (g) Aplica φ_k −= 2π·U_k en pares con corrección y fase finita.
+                for k in 0..n_pairs {
+                    if u_round[k] != 0.0 && finite[k] {
+                        row[[k, c]] = (phi[k] - TWO_PI * u_round[k]) as f32;
                     }
                 }
-                if pixel_corrected {
-                    local += 1;
-                }
+                local.0 += 1;
             }
             local
         })
-        .sum();
+        .reduce(|| (0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
 
-    Ok(corrected)
+    Ok(UnwrapCorrectionReport { corrected, detected_uncorrected })
 }
 
 #[cfg(test)]
@@ -297,8 +455,9 @@ mod tests {
         stack.data[[0, 0, 0]] += TWO_PI as f32;
         stack.data[[0, 1, 2]] += TWO_PI as f32;
 
-        let n = correct_unwrap_errors(&mut stack).unwrap();
-        assert_eq!(n, 2, "deberían corregirse exactamente 2 píxeles");
+        let rep = correct_unwrap_errors(&mut stack).unwrap();
+        assert_eq!(rep.corrected, 2, "deberían corregirse exactamente 2 píxeles");
+        assert_eq!(rep.detected_uncorrected, 0);
 
         // Los pares inyectados recuperan su valor original.
         assert!(
@@ -329,14 +488,14 @@ mod tests {
         // y stack intacto.
         let mut stack = consistent_stack(3, 3);
         let orig = stack.data.clone();
-        let n = correct_unwrap_errors(&mut stack).unwrap();
-        assert_eq!(n, 0);
+        let rep = correct_unwrap_errors(&mut stack).unwrap();
+        assert_eq!(rep, UnwrapCorrectionReport::default());
         assert_eq!(stack.data, orig);
     }
 
     #[test]
     fn red_sin_lazos_devuelve_cero() {
-        // 2 épocas, 1 par → sin redundancia → Ok(0), stack intacto.
+        // 2 épocas, 1 par → sin redundancia → reporte vacío, stack intacto.
         let mut stack = UnwrappedStack {
             data: Array3::<f32>::from_elem((1, 2, 2), 1.5),
             epochs: epochs(2),
@@ -344,23 +503,23 @@ mod tests {
             meta: meta(),
         };
         let orig = stack.data.clone();
-        let n = correct_unwrap_errors(&mut stack).unwrap();
-        assert_eq!(n, 0);
+        let rep = correct_unwrap_errors(&mut stack).unwrap();
+        assert_eq!(rep, UnwrapCorrectionReport::default());
         assert_eq!(stack.data, orig);
     }
 
     #[test]
     fn nan_en_un_par_no_rompe() {
-        // Un píxel con un par NaN: los lazos que lo incluyen se ignoran; no
-        // hay panic y el píxel no se "corrige" espuriamente.
+        // Un píxel con un par NaN: los lazos que lo incluyen se excluyen del
+        // solver; no hay panic y el píxel no se "corrige" espuriamente.
         let mut stack = consistent_stack(1, 2);
         stack.data[[0, 0, 0]] = f32::NAN; // par 0 NaN en píxel (0,0)
         let orig = stack.data.clone();
 
-        let n = correct_unwrap_errors(&mut stack).unwrap();
-        // Los lazos que usan el par 0 se ignoran; los demás cierran en 0 →
+        let rep = correct_unwrap_errors(&mut stack).unwrap();
+        // Los lazos que usan el par 0 se excluyen; los demás cierran en 0 →
         // píxel sin corrección y sin panic.
-        assert_eq!(n, 0);
+        assert_eq!(rep, UnwrapCorrectionReport::default());
         // El NaN persiste y el resto queda intacto.
         assert!(stack.data[[0, 0, 0]].is_nan());
         for k in 1..stack.pairs.len() {
@@ -370,5 +529,93 @@ mod tests {
         for k in 0..stack.pairs.len() {
             assert_eq!(stack.data[[k, 0, 1]], orig[[k, 0, 1]]);
         }
+    }
+
+    #[test]
+    fn red_minima_detecta_pero_no_corrige() {
+        // Red de 3 pares = 1 solo lazo: un salto de 2π da U = ±1/3 en cada
+        // par → round → 0 → la corrección L2 es nula. Antes esto pasaba en
+        // silencio; ahora el píxel queda intacto y se reporta como
+        // detectado-sin-corregir.
+        let pairs = vec![pair(0, 1), pair(1, 2), pair(0, 2)];
+        let mut data = Array3::<f32>::zeros((3, 1, 2));
+        for (k, p) in pairs.iter().enumerate() {
+            data.index_axis_mut(Axis(0), k)
+                .fill(POT[p.secondary] - POT[p.reference]);
+        }
+        let mut stack =
+            UnwrappedStack { data, epochs: epochs(3), pairs, meta: meta() };
+        stack.data[[0, 0, 0]] += TWO_PI as f32; // salto en el par (0,1)
+        let orig = stack.data.clone();
+
+        let rep = correct_unwrap_errors(&mut stack).unwrap();
+        assert_eq!(rep.corrected, 0);
+        assert_eq!(rep.detected_uncorrected, 1);
+        // El píxel con el salto queda INTACTO (no semi-corregido).
+        assert_eq!(stack.data, orig);
+    }
+
+    #[test]
+    fn salto_se_corrige_con_otro_par_nan() {
+        // Píxel con el par (2,3) NaN y salto de 2π en el par (0,1): los dos
+        // lazos activos que contienen (0,1) bastan para localizar el salto.
+        // Antes, los lazos con NaN entraban a la pinv como "cierre 0" falso y
+        // sesgaban U hacia cero; ahora se excluyen del solver.
+        let mut stack = consistent_stack(1, 2);
+        let orig = stack.data.clone();
+        stack.data[[5, 0, 0]] = f32::NAN; // par (2,3) NaN
+        stack.data[[0, 0, 0]] += TWO_PI as f32; // salto en el par (0,1)
+
+        let rep = correct_unwrap_errors(&mut stack).unwrap();
+        assert_eq!(rep.corrected, 1, "el salto debía corregirse");
+        assert_eq!(rep.detected_uncorrected, 0);
+        assert!(
+            (stack.data[[0, 0, 0]] - orig[[0, 0, 0]]).abs() < 1e-3,
+            "par (0,1) no recuperó su valor: {} vs {}",
+            stack.data[[0, 0, 0]],
+            orig[[0, 0, 0]]
+        );
+        // El NaN persiste; los demás pares del píxel quedan intactos.
+        assert!(stack.data[[5, 0, 0]].is_nan());
+        for k in 1..5 {
+            assert_eq!(stack.data[[k, 0, 0]], orig[[k, 0, 0]], "par {k} cambió");
+        }
+        // El píxel limpio vecino no cambia.
+        for k in 0..stack.pairs.len() {
+            assert_eq!(stack.data[[k, 0, 1]], orig[[k, 0, 1]]);
+        }
+    }
+
+    #[test]
+    fn stack_invalido_es_error_no_panic() {
+        // Pares declarados ≠ capas → error de validate, sin panic.
+        let mut stack = consistent_stack(1, 1);
+        stack.pairs.pop();
+        assert!(correct_unwrap_errors(&mut stack).is_err());
+    }
+
+    // ---------- nonzero_closure_count ----------
+
+    #[test]
+    fn conteo_de_cierres_detecta_salto_y_respeta_nan() {
+        let mut stack = consistent_stack(2, 2);
+        // Píxel (0,0): salto de 2π en el par (0,1) → los 2 lazos que lo
+        // contienen (tripletes 0-1-2 y 0-1-3) no cierran. Píxel (1,1): par
+        // (2,3) NaN → solo quedan 2 lazos activos, consistentes.
+        stack.data[[0, 0, 0]] += TWO_PI as f32;
+        stack.data[[5, 1, 1]] = f32::NAN;
+
+        let qc = nonzero_closure_count(&stack).unwrap();
+        assert_eq!(qc[[0, 0]], 2.0, "2 lazos contienen el par (0,1)");
+        assert_eq!(qc[[0, 1]], 0.0, "píxel consistente");
+        assert_eq!(qc[[1, 1]], 0.0, "lazos activos consistentes con par NaN");
+
+        // Píxel sin ningún lazo activo → NaN.
+        let mut isolated = consistent_stack(1, 1);
+        for k in 0..isolated.pairs.len() {
+            isolated.data[[k, 0, 0]] = f32::NAN;
+        }
+        let qc = nonzero_closure_count(&isolated).unwrap();
+        assert!(qc[[0, 0]].is_nan());
     }
 }

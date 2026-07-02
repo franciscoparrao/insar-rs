@@ -70,7 +70,7 @@ fn main() {
     println!("variograma ajustado (wsse={:.3})", fit.wsse);
 
     // Kriging ordinario, vecindario de 40 puntos.
-    let cfg = KrigingConfig { method: KrigingMethod::Ordinary, max_neighbors: Some(40), search_radius: None };
+    let cfg = KrigingConfig { method: KrigingMethod::Ordinary, max_neighbors: Some(40), ..Default::default() };
     let kr = Kriging::new(&data, &fit.model, cfg).unwrap();
 
     let t = std::time::Instant::now();

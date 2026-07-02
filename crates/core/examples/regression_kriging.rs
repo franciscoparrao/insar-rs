@@ -117,7 +117,7 @@ fn main() {
         gaps.iter().flat_map(|&(r, c)| [dem[r * nc + c] as f64, slope(r, c) as f64]).collect(),
     ).unwrap();
     let trend_at_targets = predicted(&model.predict(&tcov).unwrap());
-    let cfg = KrigingConfig { method: KrigingMethod::Ordinary, max_neighbors: Some(40), search_radius: None };
+    let cfg = KrigingConfig { method: KrigingMethod::Ordinary, max_neighbors: Some(40), ..Default::default() };
     let t = std::time::Instant::now();
     let est = rk.predict(&targets, &trend_at_targets, &fit.model, &cfg).unwrap();
     println!("regression kriging de {} huecos: {:.1}s", targets.len(), t.elapsed().as_secs_f64());

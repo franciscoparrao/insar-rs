@@ -15,7 +15,7 @@ use std::io::Read;
 use std::path::Path;
 
 use serde::Deserialize;
-use swarm_core::prelude::*;
+use swarm_abm::prelude::*;
 
 const HAZARD_THR: f32 = 5.0; // cm/año: umbral de "deformación significativa"
 

@@ -1,15 +1,31 @@
-//! Post-procesamiento de productos: eliminación de rampas (deramp).
+//! Post-procesamiento de productos: los tres pilares del postproceso SBAS
+//! estándar viven (o se re-exportan) aquí:
 //!
-//! Las velocidades y series InSAR suelen contener una tendencia de larga
-//! longitud de onda (rampa) por errores orbitales y atmósfera de gran escala,
-//! ajena a la deformación local. `remove_ramp` ajusta un plano (o superficie
-//! cuadrática) sobre los píxeles válidos y lo resta, aislando la señal local.
+//! - **Referenciado espacial**: [`reference_to_pixel`] (re-export de
+//!   `inversion`) elimina el offset de fase arbitrario por interferograma.
+//! - **Calidad**: [`temporal_coherence`] (re-export de `inversion`) +
+//!   [`coherence_mask`] producen la máscara booleana que alimenta los
+//!   parámetros `mask` de [`remove_ramp`] y
+//!   [`crate::troposphere::correct_topo_correlated`].
+//! - **Deramp**: [`remove_ramp`]/[`deramp_series`] ajustan y restan una
+//!   superficie (plano o cuadrática) de larga longitud de onda — errores
+//!   orbitales y atmósfera de gran escala, ajenos a la deformación local.
 
 use nalgebra::{DMatrix, DVector};
 use ndarray::{Array2, Axis};
 
 use crate::error::{InsarError, Result};
 use crate::types::DisplacementSeries;
+
+pub use crate::inversion::{reference_to_pixel, temporal_coherence};
+
+/// Máscara booleana de calidad: `true` donde `gamma >= threshold` (NaN →
+/// `false`). Pensada para umbralar la coherencia temporal (`γ_temp < ~0.7`
+/// suele descartarse) y alimentar `mask` en [`remove_ramp`] o
+/// [`crate::troposphere::correct_topo_correlated`].
+pub fn coherence_mask(gamma: &Array2<f32>, threshold: f32) -> Array2<bool> {
+    gamma.map(|&g| g.is_finite() && g >= threshold)
+}
 
 /// Tipo de superficie a ajustar y restar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -217,5 +233,15 @@ mod tests {
     fn pocos_pixeles_es_error() {
         let mut d = Array2::<f32>::from_elem((1, 1), 1.0);
         assert!(remove_ramp(&mut d, RampKind::Linear, None).is_err());
+    }
+
+    #[test]
+    fn coherence_mask_umbral_y_nan() {
+        let gamma = ndarray::arr2(&[[0.9_f32, 0.69], [f32::NAN, 0.7]]);
+        let m = coherence_mask(&gamma, 0.7);
+        assert!(m[[0, 0]]);
+        assert!(!m[[0, 1]]);
+        assert!(!m[[1, 0]], "NaN debe quedar fuera de la máscara");
+        assert!(m[[1, 1]], "el umbral es inclusivo");
     }
 }

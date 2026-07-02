@@ -1,0 +1,109 @@
+# CI de insar-rs: tests + clippy en Linux, wheels abi3 multi-plataforma.
+#
+# NOTA sobre dependencias hermanas: el workspace usa path-deps a repos
+# hermanos (surtgis, geostat-rs, smelt, swarm-abm), así que el workflow los
+# clona AL LADO del checkout principal para reproducir el layout local
+# (~/proyectos/*). Si esos repos son privados, definir el secret
+# `SIBLINGS_TOKEN` (PAT con permiso de lectura) — con repos públicos basta
+# el token por defecto.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test + Clippy (Linux)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: insar-rs
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: insar-rs
+
+      # Repos hermanos, en el mismo layout relativo que el desarrollo local.
+      - uses: actions/checkout@v4
+        with:
+          repository: franciscoparrao/surtgis
+          path: surtgis
+          token: ${{ secrets.SIBLINGS_TOKEN || github.token }}
+      - uses: actions/checkout@v4
+        with:
+          repository: franciscoparrao/geostat-rs
+          path: geostat-rs
+          token: ${{ secrets.SIBLINGS_TOKEN || github.token }}
+      - uses: actions/checkout@v4
+        with:
+          repository: franciscoparrao/smelt
+          path: smelt
+          token: ${{ secrets.SIBLINGS_TOKEN || github.token }}
+      - uses: actions/checkout@v4
+        with:
+          repository: franciscoparrao/swarm-abm
+          path: swarm-abm
+          token: ${{ secrets.SIBLINGS_TOKEN || github.token }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: insar-rs
+
+      - name: Clippy (sin warnings en los crates propios)
+        run: cargo clippy -p insar-core -p insar-cli --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test --workspace
+
+  wheels:
+    name: Wheels abi3 (${{ matrix.os }})
+    needs: test
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: insar-rs
+      # Aunque el wheel solo compila insar-core+surtgis, cargo resuelve el
+      # workspace completo (incluidas las dev-deps con path): se necesitan
+      # los cuatro hermanos en disco.
+      - uses: actions/checkout@v4
+        with:
+          repository: franciscoparrao/surtgis
+          path: surtgis
+          token: ${{ secrets.SIBLINGS_TOKEN || github.token }}
+      - uses: actions/checkout@v4
+        with:
+          repository: franciscoparrao/geostat-rs
+          path: geostat-rs
+          token: ${{ secrets.SIBLINGS_TOKEN || github.token }}
+      - uses: actions/checkout@v4
+        with:
+          repository: franciscoparrao/smelt
+          path: smelt
+          token: ${{ secrets.SIBLINGS_TOKEN || github.token }}
+      - uses: actions/checkout@v4
+        with:
+          repository: franciscoparrao/swarm-abm
+          path: swarm-abm
+          token: ${{ secrets.SIBLINGS_TOKEN || github.token }}
+
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          args: --release --manifest-path insar-rs/crates/python/Cargo.toml --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}
+          path: dist/*.whl

@@ -4,13 +4,28 @@ build-backend = "maturin"
 
 [project]
 name = "insar-rs"
-description = "Python bindings for the insar-rs SBAS engine (Rust)"
+description = "Python bindings for the insar-rs InSAR time-series (SBAS) engine written in Rust"
+readme = "README.md"
 requires-python = ">=3.9"
+license = { text = "MIT OR Apache-2.0" }
+authors = [{ name = "Francisco Parra", email = "gran.huja@gmail.com" }]
+keywords = ["insar", "sar", "sbas", "deformation", "remote-sensing", "sentinel-1"]
 classifiers = [
     "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
     "Topic :: Scientific/Engineering :: GIS",
+    "Topic :: Scientific/Engineering :: Atmospheric Science",
+    "Operating System :: OS Independent",
 ]
+dependencies = ["numpy>=1.23"]
 dynamic = ["version"]
+
+[project.urls]
+Repository = "https://github.com/franciscoparrao/insar-rs"
+Changelog = "https://github.com/franciscoparrao/insar-rs/blob/main/CHANGELOG.md"
 
 [tool.maturin]
 module-name = "insar_rs"

@@ -8,6 +8,9 @@ repository.workspace = true
 description.workspace = true
 keywords.workspace = true
 categories.workspace = true
+# Los examples usan crates hermanos (geostat/smelt/swarm) que cargo strippea
+# al publicar (dev-deps sin version): se excluyen del paquete publicado.
+exclude = ["examples/"]
 
 [dependencies]
 ndarray.workspace = true
@@ -29,7 +32,7 @@ geostat-core = { path = "../../../geostat-rs/crates/geostat-core" }
 # ML nativo (clasificación/regresión + CV espacial + conformal) para ejemplos.
 smelt-ml = { path = "../../../smelt" }
 # Modelado basado en agentes (ABM) para el ejemplo de exposición/impacto.
-swarm-core = { path = "../../../swarm-abm/crates/swarm-core" }
+swarm-abm = { path = "../../../swarm-abm/crates/swarm-abm" }
 
 [[bench]]
 name = "sbas"

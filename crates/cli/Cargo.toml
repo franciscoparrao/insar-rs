@@ -15,3 +15,8 @@ path = "src/main.rs"
 insar-core.workspace = true
 clap.workspace = true
 anyhow.workspace = true
+
+[dev-dependencies]
+# Solo para el smoke test (construir el stack sintético de entrada).
+ndarray.workspace = true
+surtgis-core.workspace = true

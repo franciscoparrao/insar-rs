@@ -40,16 +40,22 @@ temporal de desplazamiento LOS, con validación numérica contra MintPy.
 
 | Módulo | Responsabilidad | Nivel | Dependencias | Tamaño est. |
 |--------|----------------|-------|--------------|-------------|
-| `types` + `error` | Contratos: stacks, pares, metadata, resultados | scaffold (✔ completo) | — | ~250 líneas |
-| `io` | Leer stacks GeoTIFF (+ISCE plano), escribir velocidad/series | 0 | types, surtgis-core | ~400 |
-| `ps` | Amplitude dispersion + selección de PS | 0 | types | ~200 |
-| `network` | Red SBAS (umbrales temporal/perp), matriz de diseño, conectividad | 0 | types | ~250 |
-| `unwrap` | Desenrollado 2D mínimo (flood-fill por calidad) | 0 | types | ~300 |
-| `inversion` | LSQ SBAS (nalgebra SVD), fase→desplazamiento, velocidad | 0 | types, network (solo `design_matrix`) | ~350 |
-| `atmosphere` | Corrección APS simple (filtro espacio-temporal) | 0 | types | ~200 |
-| `pipeline` | Orquesta el flujo completo SBAS end-to-end | 1 | todos los anteriores | ~200 |
-| `cli` (crate) | Subcomandos: info, ps, network, invert, run | 2 | insar-core | ~250 |
-| validación | Cross-check vs MintPy sobre stack público | 3 | pipeline + datos | notebook/script |
+| `types` + `error` | Contratos: stacks, pares, metadata, resultados | scaffold (✔) | — | ~250 líneas |
+| `io` | Formato stack.json (GeoTIFF + coherencia opcional), escribir productos | 0 (✔) | types, surtgis-core | ~750 |
+| `io::isce` | Lector ISCE nativo: .unw/.int/.cor/.conncomp/los.rdr + baselines | 0 (✔) | types, roxmltree | ~900 |
+| `ps` | Amplitude dispersion + selección de PS | 0 (✔) | types | ~250 |
+| `network` | Red SBAS (umbrales temporal/perp), matriz de diseño, conectividad | 0 (✔) | types | ~330 |
+| `unwrap` | Desenrollado 2D quality-guided + min_quality | 0 (✔) | types | ~550 |
+| `unwrap_error` | Corrección por cierre de fase (verificada) + QC de cierres | 0 (✔) | types, network | ~600 |
+| `inversion` | SBAS OLS/WLS/L1-IRLS, error de DEM, velocidad (SE, bootstrap, modelo temporal), γ_temp, referenciado | 0 (✔) | types, network | ~1600 |
+| `atmosphere` | APS espacio-temporal (fit lineal local en tiempo real) | 0 (✔) | types | ~500 |
+| `troposphere` | Corrección estratificada fase-elevación (Doin 2009) | 0 (✔) | types | ~240 |
+| `postprocess` | Deramp, coherence_mask, re-exports de postproceso | 0 (✔) | types, inversion | ~250 |
+| `decompose` | LOS → (Up, East), escalar y por píxel (los.rdr) | 0 (✔) | types | ~450 |
+| `features` | Descriptores por píxel para ML (tabla determinista → smelt-ml) | 1 (✔) | types | ~750 |
+| `pipeline` | Orquesta el flujo SBAS end-to-end (orden físico + QC) | 1 (✔) | todos los anteriores | ~300 |
+| `cli` (crate) | info, ps, network, run, isce (--wls --robust --dem-error-range --deramp) | 2 (✔) | insar-core | ~300 |
+| validación | Cross-check vs MintPy sobre stack público | 3 (✔ OLS) | pipeline + datos | script |
 
 ### Grafo de dependencias
 

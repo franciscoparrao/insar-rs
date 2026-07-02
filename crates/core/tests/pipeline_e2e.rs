@@ -176,11 +176,10 @@ fn read_velocity(path: &Path) -> Raster<f32> {
 
 fn pipeline_config(input: &Path, output: &Path, ps_threshold: Option<f32>) -> SbasPipelineConfig {
     SbasPipelineConfig {
-        input_dir: input.to_path_buf(),
-        output_dir: output.to_path_buf(),
         ps_threshold,
         network: SbasConfig::default(),
         aps: ApsConfig::default(),
+        ..SbasPipelineConfig::new(input.to_path_buf(), output.to_path_buf())
     }
 }
 
@@ -215,6 +214,21 @@ fn run_e2e(base: &Path) {
     let series_dir = output_full.join("series");
     assert!(vel_path.exists(), "velocity.tif debe existir");
     assert!(series_dir.is_dir(), "series/ debe existir");
+    assert!(
+        output_full.join("temporal_coherence.tif").exists(),
+        "temporal_coherence.tif debe existir"
+    );
+    assert!(
+        output_full.join("closure_qc.tif").exists(),
+        "closure_qc.tif debe existir (correct_unwrap default)"
+    );
+
+    // Stack sintético consistente: la corrección de cierre no toca nada y la
+    // coherencia temporal del ajuste es ~1 en el centro.
+    let report = products.unwrap_report.expect("reporte de cierre presente");
+    assert_eq!(report.corrected, 0, "sintético consistente: sin correcciones");
+    let center_gamma = products.temporal_coherence[[CENTER as usize, CENTER as usize]];
+    assert!(center_gamma > 0.99, "γ_temp central = {center_gamma}");
     assert_eq!(
         fs::read_dir(&series_dir).unwrap().count(),
         N_EPOCHS,
