@@ -5,6 +5,26 @@ versionado: [SemVer](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Backend SNAPHU opcional para el desenrollado 2D (G-3 del backlog v0.2)
+
+Shell-out a un binario `snaphu` instalado por separado (patrón estándar del
+ecosistema InSAR — MintPy/ISCE2 hacen lo mismo, vía Python; sin FFI ni
+vendorizar SNAPHU dentro de insar-rs, cero dependencias Rust nuevas).
+Verificado de punta a punta con SNAPHU real (conda-forge): resultados
+idénticos al flood-fill propio sobre el stack sintético de referencia. Ver
+`docs/auditoria-2026-07-02.md` (G-3) para el detalle de la decisión.
+
+- `unwrap::snaphu`: `unwrap_2d_snaphu`/`unwrap_stack_snaphu` (mismo
+  contrato NoData que `unwrap::unwrap_2d`), `SnaphuConfig` (ruta al
+  binario). Formato `FLOAT_DATA`/`STATCOSTMODE SMOOTH` (mismo modo ya
+  usado por `validation/isce_unwrap.py` en este proyecto).
+- `pipeline`: `SbasPipelineConfig.unwrap_backend: UnwrapBackend`
+  (`FloodFill` default, sin cambios de comportamiento; `Snaphu(SnaphuConfig)`
+  opcional).
+- CLI: `insar run --unwrap-backend {flood-fill,snaphu} [--snaphu-bin PATH]`.
+  El subcomando `isce` no cambia (no invoca `unwrap::*` — los `.unw` llegan
+  ya desenrollados).
+
 ### Escalabilidad de memoria: mmap del camino ISCE (G-9 del backlog v0.2)
 
 Investigación previa (3 agentes en paralelo) acotó el alcance: el unwrap 2D

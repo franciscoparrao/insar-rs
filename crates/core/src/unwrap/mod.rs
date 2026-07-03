@@ -34,6 +34,17 @@ use rayon::prelude::*;
 use crate::error::{InsarError, Result};
 use crate::types::{IfgStack, UnwrappedStack};
 
+pub mod snaphu;
+
+/// Fase envuelta (arg(z)) de la capa `k` de un `IfgStack`; NaN si `re`/`im`
+/// no son finitos. Compartida entre [`unwrap_stack_min_quality`] y el
+/// backend [`snaphu::unwrap_stack_snaphu`].
+fn wrapped_phase_layer(stack: &IfgStack, k: usize) -> Array2<f32> {
+    stack.data.index_axis(Axis(0), k).map(|z| {
+        if z.re.is_finite() && z.im.is_finite() { z.im.atan2(z.re) } else { f32::NAN }
+    })
+}
+
 const TWO_PI: f64 = 2.0 * std::f64::consts::PI;
 
 /// Lleva una diferencia de fase al rango (−π, π].
@@ -274,14 +285,7 @@ pub fn unwrap_stack_min_quality(
     let layers: Vec<Array2<f32>> = (0..n_layers)
         .into_par_iter()
         .map(|k| {
-            // Fase envuelta = arg(z); NaN si re o im no son finitos.
-            let wrapped = stack.data.index_axis(Axis(0), k).map(|z| {
-                if z.re.is_finite() && z.im.is_finite() {
-                    z.im.atan2(z.re)
-                } else {
-                    f32::NAN
-                }
-            });
+            let wrapped = wrapped_phase_layer(stack, k);
             let qual = coherence.map(|coh| coh.index_axis(Axis(0), k).to_owned());
             unwrap_2d_min_quality(&wrapped, qual.as_ref(), min_quality)
         })

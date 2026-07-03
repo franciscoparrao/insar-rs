@@ -16,7 +16,7 @@ Scatterers, con validación numérica contra MintPy.
 | `io::isce` | **Lector ISCE nativo** (VRT + raw): `.unw` (NoData enmascarado), `.int` (CFloat32), `.cor`, `.unw.conncomp`, `los.rdr` (geometría por píxel), baselines topsStack |
 | `ps` | Amplitude dispersion y selección de candidatos PS |
 | `network` | Red small-baseline (doble umbral), matriz de diseño, conectividad |
-| `unwrap` | Desenrollado 2D quality-guided con coherencia y umbral `min_quality` |
+| `unwrap` | Desenrollado 2D quality-guided con coherencia y umbral `min_quality`; **backend SNAPHU opcional** (`unwrap::snaphu`, shell-out) |
 | `unwrap_error` | Corrección de saltos 2π por **cierre de fase** (con verificación de efectividad) + QC `nonzero_closure_count` |
 | `inversion` | SBAS OLS / **WLS por coherencia** / **L1 robusto (IRLS)**; **error de DEM** (∝ B⊥); velocidad + SE formal + **bootstrap**; **modelo temporal** (polinomio + estacional + saltos); coherencia temporal; referenciado |
 | `atmosphere` | Filtro APS espacio-temporal (pasa-alto temporal en **tiempo real** — robusto a gaps) |
@@ -30,7 +30,8 @@ Scatterers, con validación numérica contra MintPy.
 
 - `crates/core` — `insar-core`: el motor (tabla de arriba).
 - `crates/cli` — binario `insar`: `info`, `ps`, `network`, `run`
-  (`--min-quality`, `--deramp`, `--no-closure-correction`), `isce`
+  (`--min-quality`, `--unwrap-backend {flood-fill,snaphu}`, `--snaphu-bin`,
+  `--deramp`, `--no-closure-correction`), `isce`
   (`--wls`, `--robust`, `--dem-error-range`, `--deramp`), `decompose`
   (LOS asc+desc → up/east), `features` (tabla ML por píxel, `--csv`),
   `deramp` (standalone sobre una serie ya escrita).

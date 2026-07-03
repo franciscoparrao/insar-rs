@@ -9,9 +9,12 @@
 //! 2. Si hay `ps_threshold`, lee amplitudes del mismo directorio, calcula
 //!    amplitude dispersion y selecciona PS; sin umbral se invierte toda la
 //!    grilla (modo SBAS clásico).
-//! 3. Desenrolla la fase de cada par (`unwrap::unwrap_stack_min_quality`),
-//!    con la coherencia como mapa de calidad y el umbral opcional
-//!    [`SbasPipelineConfig::unwrap_min_quality`].
+//! 3. Desenrolla la fase de cada par con el backend configurado
+//!    ([`SbasPipelineConfig::unwrap_backend`]): flood-fill propio
+//!    (`unwrap::unwrap_stack_min_quality`, default, con el umbral opcional
+//!    [`SbasPipelineConfig::unwrap_min_quality`]) o SNAPHU externo
+//!    (`unwrap::snaphu::unwrap_stack_snaphu`, requiere el binario `snaphu`).
+//!    En ambos casos la coherencia se usa como mapa de calidad.
 //! 4. Corrige errores de desenrollado por cierre de fase
 //!    (`unwrap_error::correct_unwrap_errors`, si `correct_unwrap`) y computa
 //!    el QC de cierres residuales (`unwrap_error::nonzero_closure_count`).
@@ -63,6 +66,19 @@ use crate::types::{DisplacementSeries, PsCandidate, VelocityMap};
 use crate::unwrap_error::UnwrapCorrectionReport;
 use crate::{inversion, io, postprocess, ps, unwrap, unwrap_error};
 
+/// Backend de desenrollado 2D usado por [`run_sbas`] (paso 3).
+#[derive(Debug, Clone, Default)]
+pub enum UnwrapBackend {
+    /// Flood-fill quality-guided propio (ver [`unwrap`]) — default, sin
+    /// dependencias externas.
+    #[default]
+    FloodFill,
+    /// Shell-out a un binario `snaphu` instalado por separado (ver
+    /// [`unwrap::snaphu`], gap G-3 de la auditoría). Requiere el binario en
+    /// PATH o en [`unwrap::snaphu::SnaphuConfig::binary`].
+    Snaphu(unwrap::snaphu::SnaphuConfig),
+}
+
 /// Configuración del pipeline completo. Construir con
 /// [`SbasPipelineConfig::new`] y ajustar campos según necesidad.
 #[derive(Debug, Clone)]
@@ -76,8 +92,11 @@ pub struct SbasPipelineConfig {
     pub network: SbasConfig,
     pub aps: ApsConfig,
     /// Umbral mínimo de coherencia para desenrollar un píxel (requiere
-    /// coherencia declarada en el manifiesto). `None` = sin umbral.
+    /// coherencia declarada en el manifiesto). `None` = sin umbral. Solo
+    /// aplica al backend [`UnwrapBackend::FloodFill`] (default).
     pub unwrap_min_quality: Option<f32>,
+    /// Backend de desenrollado 2D (default [`UnwrapBackend::FloodFill`]).
+    pub unwrap_backend: UnwrapBackend,
     /// Corregir errores de desenrollado por cierre de fase antes de invertir
     /// (default `true`; es no-op verificado en stacks sin cierres ≠ 0).
     pub correct_unwrap: bool,
@@ -101,6 +120,7 @@ impl SbasPipelineConfig {
             network: SbasConfig::default(),
             aps: ApsConfig::default(),
             unwrap_min_quality: None,
+            unwrap_backend: UnwrapBackend::default(),
             correct_unwrap: true,
             reference: None,
             solver: SbasSolverConfig::default(),
@@ -182,8 +202,14 @@ pub fn run_sbas(config: &SbasPipelineConfig) -> Result<SbasProducts> {
     };
 
     // 3) Desenrollado con la coherencia como calidad (+ umbral opcional).
-    let mut unwrapped =
-        unwrap::unwrap_stack_min_quality(&stack, coherence.as_ref(), config.unwrap_min_quality)?;
+    let mut unwrapped = match &config.unwrap_backend {
+        UnwrapBackend::FloodFill => {
+            unwrap::unwrap_stack_min_quality(&stack, coherence.as_ref(), config.unwrap_min_quality)?
+        }
+        UnwrapBackend::Snaphu(snaphu_config) => {
+            unwrap::snaphu::unwrap_stack_snaphu(&stack, coherence.as_ref(), snaphu_config)?
+        }
+    };
 
     // 4) Corrección de errores de desenrollado por cierre de fase + QC.
     let (unwrap_report, closure_qc) = if config.correct_unwrap {
@@ -278,5 +304,6 @@ mod tests {
         assert!(c.reference.is_none());
         assert!(c.deramp.is_none());
         assert!(c.unwrap_min_quality.is_none());
+        assert!(matches!(c.unwrap_backend, UnwrapBackend::FloodFill));
     }
 }

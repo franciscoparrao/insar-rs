@@ -27,6 +27,13 @@ impl From<DerampArg> for RampKind {
     }
 }
 
+/// Backend de desenrollado 2D expuesto en la CLI.
+#[derive(Clone, Copy, ValueEnum)]
+enum UnwrapBackendArg {
+    FloodFill,
+    Snaphu,
+}
+
 #[derive(Subcommand)]
 enum Command {
     /// Muestra metadata de un stack de interferogramas
@@ -56,9 +63,16 @@ enum Command {
         /// Umbral PS (omitir para invertir toda la grilla)
         #[arg(long)]
         ps_threshold: Option<f32>,
-        /// Coherencia mínima para desenrollar (requiere 'coherence' en stack.json)
+        /// Coherencia mínima para desenrollar (requiere 'coherence' en stack.json;
+        /// solo aplica con --unwrap-backend flood-fill)
         #[arg(long)]
         min_quality: Option<f32>,
+        /// Backend de desenrollado 2D (snaphu requiere el binario en PATH)
+        #[arg(long, default_value = "flood-fill")]
+        unwrap_backend: UnwrapBackendArg,
+        /// Ruta al binario snaphu (solo con --unwrap-backend snaphu; default: PATH)
+        #[arg(long)]
+        snaphu_bin: Option<PathBuf>,
         /// Deramp de la serie tras las correcciones
         #[arg(long)]
         deramp: Option<DerampArg>,
@@ -177,12 +191,28 @@ fn main() -> anyhow::Result<()> {
             output,
             ps_threshold,
             min_quality,
+            unwrap_backend,
+            snaphu_bin,
             deramp,
             no_closure_correction,
         } => {
+            use insar_core::pipeline::UnwrapBackend;
+            use insar_core::unwrap::snaphu::SnaphuConfig;
+
+            let unwrap_backend = match unwrap_backend {
+                UnwrapBackendArg::FloodFill => UnwrapBackend::FloodFill,
+                UnwrapBackendArg::Snaphu => {
+                    let mut snaphu_config = SnaphuConfig::default();
+                    if let Some(bin) = snaphu_bin {
+                        snaphu_config.binary = bin;
+                    }
+                    UnwrapBackend::Snaphu(snaphu_config)
+                }
+            };
             let config = SbasPipelineConfig {
                 ps_threshold,
                 unwrap_min_quality: min_quality,
+                unwrap_backend,
                 correct_unwrap: !no_closure_correction,
                 deramp: deramp.map(RampKind::from),
                 ..SbasPipelineConfig::new(input, output.clone())
