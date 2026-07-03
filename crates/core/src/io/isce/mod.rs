@@ -406,7 +406,7 @@ fn list_pair_dirs(dir: &Path) -> Result<Vec<(NaiveDate, NaiveDate, String, PathB
         )));
     }
 
-    pairs.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
+    pairs.sort_by_key(|a| (a.0, a.1));
     Ok(pairs)
 }
 
