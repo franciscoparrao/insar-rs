@@ -525,6 +525,29 @@ impl FeatureMaps {
         }
         Ok(())
     }
+
+    /// Escribe la tabla de [`Self::to_table`] como CSV en `path`: columnas
+    /// `x,y,<feature_names...>` (una fila por píxel que pasa `mask` y tiene
+    /// todas sus features finitas). `x`/`y` son coordenadas geográficas
+    /// (`GeoTransform::pixel_to_geo`), no índices de fila/columna del raster.
+    pub fn write_features_csv(&self, mask: Option<&Array2<bool>>, path: &Path) -> Result<()> {
+        use std::io::Write as _;
+
+        let (table, coords, names) = self.to_table(mask);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut f = std::fs::File::create(path)?;
+        writeln!(f, "x,y,{}", names.join(","))?;
+        for (row, (x, y)) in table.rows().into_iter().zip(coords.iter()) {
+            write!(f, "{x},{y}")?;
+            for v in row {
+                write!(f, ",{v}")?;
+            }
+            writeln!(f)?;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -759,5 +782,31 @@ mod tests {
         let series = series_1px(&epochs, &d);
         let err = extract_features(&series, None, &cfg()).unwrap_err();
         assert!(matches!(err, InsarError::DimensionMismatch(_)));
+    }
+
+    #[test]
+    fn write_features_csv_columnas_y_filas() {
+        let v_true = -0.05_f64;
+        let epochs = epochs_n(8, 24);
+        let t: Vec<f64> = epochs.iter().map(|e| e.years_since(&epochs[0])).collect();
+        let d: Vec<f64> = t.iter().map(|&ti| v_true * ti).collect();
+        let series = series_1px(&epochs, &d);
+        let f = extract_features(&series, None, &cfg()).unwrap();
+
+        let dir = std::env::temp_dir().join(format!("insar_features_csv_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("features.csv");
+        f.write_features_csv(None, &path).unwrap();
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        let mut lines = text.lines();
+        let header = lines.next().unwrap();
+        assert_eq!(header, format!("x,y,{}", f.feature_names().join(",")));
+        let rows: Vec<&str> = lines.collect();
+        assert_eq!(rows.len(), 1, "un único píxel finito"); // serie 1×1 sin NaN
+        let cols: Vec<&str> = rows[0].split(',').collect();
+        assert_eq!(cols.len(), 2 + f.feature_names().len());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

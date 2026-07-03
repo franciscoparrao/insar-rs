@@ -5,6 +5,24 @@ versionado: [SemVer](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Exponer los diferenciadores (G-17 del backlog v0.2)
+
+`features`, `decompose` y `deramp` (`postprocess::remove_ramp`/
+`deramp_series`) ya existían y estaban testeados, pero solo eran alcanzables
+escribiendo Rust contra `examples/`. `unwrap_error::correct_unwrap_errors` ya
+estaba integrado en `run`/`isce` de la CLI; le faltaba el binding Python.
+
+- `io`: lectores `read_velocity`/`read_series`, simétricos de
+  `write_velocity`/`write_series` (permiten releer un `VelocityMap`/
+  `DisplacementSeries` ya escritos por un pipeline previo).
+- `features`: `FeatureMaps::write_features_csv` (tabla `x,y,<features>`,
+  además de los GeoTIFF individuales de `write_geotiffs`).
+- CLI: subcomandos nuevos `decompose` (LOS asc+desc → up.tif/east.tif,
+  geometría escalar), `features` (`--csv` opcional) y `deramp` (standalone).
+- Python (`insar_rs`): `decompose_asc_desc`, `decompose_per_pixel`
+  (geometría por píxel — sin superficie externa hasta ahora),
+  `extract_features` (dict de arrays), `remove_ramp`, `correct_unwrap_errors`.
+
 ## [0.1.0] — 2026-07-02
 
 Primera versión funcional del motor: SBAS end-to-end validado contra MintPy

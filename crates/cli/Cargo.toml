@@ -15,8 +15,10 @@ path = "src/main.rs"
 insar-core.workspace = true
 clap.workspace = true
 anyhow.workspace = true
+# GeoTransform::default() en decompose/features/deramp (read_velocity/
+# read_series sobrescriben la georreferencia real desde el archivo).
+surtgis-core.workspace = true
 
 [dev-dependencies]
 # Solo para el smoke test (construir el stack sintético de entrada).
 ndarray.workspace = true
-surtgis-core.workspace = true

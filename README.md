@@ -31,9 +31,14 @@ Scatterers, con validación numérica contra MintPy.
 - `crates/core` — `insar-core`: el motor (tabla de arriba).
 - `crates/cli` — binario `insar`: `info`, `ps`, `network`, `run`
   (`--min-quality`, `--deramp`, `--no-closure-correction`), `isce`
-  (`--wls`, `--robust`, `--dem-error-range`, `--deramp`).
+  (`--wls`, `--robust`, `--dem-error-range`, `--deramp`), `decompose`
+  (LOS asc+desc → up/east), `features` (tabla ML por píxel, `--csv`),
+  `deramp` (standalone sobre una serie ya escrita).
 - `crates/python` — `insar_rs`: bindings PyO3/numpy (cómputo sin GIL,
-  excepciones idiomáticas). Ver `crates/python/README.md`.
+  excepciones idiomáticas): `invert_sbas`, `estimate_velocity[_uncertainty]`,
+  `amplitude_dispersion`, `temporal_coherence`, `sbas_from_isce`,
+  `decompose_asc_desc`, `decompose_per_pixel`, `extract_features`,
+  `remove_ramp`, `correct_unwrap_errors`. Ver `crates/python/README.md`.
 
 ## Validación
 
@@ -46,7 +51,7 @@ rendimiento en [`docs/benchmarks.md`](docs/benchmarks.md).
 
 ```bash
 cargo build --release          # binario insar
-cargo test  --workspace        # 170+ tests
+cargo test  --workspace        # 166 tests (163 unit + 1 e2e + 2 smoke CLI)
 ```
 
 Requiere el repo hermano [`surtgis`](../surtgis) en `../surtgis`

@@ -66,6 +66,61 @@ enum Command {
         #[arg(long)]
         no_closure_correction: bool,
     },
+    /// Descompone LOS ascendente + descendente en (Up, East) — geometría escalar
+    Decompose {
+        /// GeoTIFF LOS ascendente (m/año o m; misma unidad que la salida)
+        asc_los: PathBuf,
+        /// GeoTIFF LOS descendente (misma grilla y unidad que asc_los)
+        desc_los: PathBuf,
+        /// Directorio de salida (up.tif + east.tif)
+        output: PathBuf,
+        /// Ángulo de incidencia medio ascendente (grados)
+        #[arg(long)]
+        asc_incidence_deg: f64,
+        /// Heading de la plataforma ascendente (grados)
+        #[arg(long)]
+        asc_heading_deg: f64,
+        /// Ángulo de incidencia medio descendente (grados)
+        #[arg(long)]
+        desc_incidence_deg: f64,
+        /// Heading de la plataforma descendente (grados)
+        #[arg(long)]
+        desc_heading_deg: f64,
+    },
+    /// Descriptores por píxel para ML (velocidad, aceleración, estacionalidad...)
+    Features {
+        /// Directorio con la serie (disp_YYYYMMDD.tif, salida de 'run'/'isce')
+        series_dir: PathBuf,
+        /// Directorio de salida (un GeoTIFF por feature)
+        output: PathBuf,
+        /// Longitud de onda radar en metros
+        #[arg(long, default_value_t = insar_core::types::SENTINEL1_WAVELENGTH_M)]
+        wavelength_m: f64,
+        /// Desactiva las features estacionales (amplitud/fase anual)
+        #[arg(long)]
+        no_seasonal: bool,
+        /// Desactiva la feature de aceleración (ajuste cuadrático)
+        #[arg(long)]
+        no_acceleration: bool,
+        /// Mínimo de épocas finitas por píxel para ajustar
+        #[arg(long, default_value_t = 5)]
+        min_valid_epochs: usize,
+        /// Además escribe la tabla (x,y,features) como CSV
+        #[arg(long)]
+        csv: bool,
+    },
+    /// Deramp standalone de una serie ya escrita (fuera de 'run'/'isce')
+    Deramp {
+        /// Directorio con la serie (disp_YYYYMMDD.tif)
+        series_dir: PathBuf,
+        /// Directorio de salida
+        output: PathBuf,
+        /// Modelo de rampa
+        kind: DerampArg,
+        /// Longitud de onda radar en metros
+        #[arg(long, default_value_t = insar_core::types::SENTINEL1_WAVELENGTH_M)]
+        wavelength_m: f64,
+    },
     /// SBAS directo desde interferogramas ISCE (.unw ya desenrollados)
     Isce {
         /// Directorio de interferogramas ISCE (subdirs YYYYMMDD_YYYYMMDD)
@@ -145,6 +200,100 @@ fn main() -> anyhow::Result<()> {
                 );
             }
             println!("escrito: {}/velocity.tif + temporal_coherence.tif + series/", output.display());
+        }
+        Command::Decompose {
+            asc_los,
+            desc_los,
+            output,
+            asc_incidence_deg,
+            asc_heading_deg,
+            desc_incidence_deg,
+            desc_heading_deg,
+        } => {
+            use insar_core::decompose::{LosVector, decompose_asc_desc};
+            use insar_core::types::{SENTINEL1_WAVELENGTH_M, StackMeta};
+
+            // El GeoTIFF no guarda wavelength/incidencia/heading (no son
+            // geográficos); transform/crs se sobrescriben desde el archivo
+            // dentro de read_velocity, así que los valores de placeholder
+            // aquí son irrelevantes salvo incidence/heading (documentales).
+            let meta_for = |incidence_deg: f64, heading_deg: f64| StackMeta {
+                transform: surtgis_core::GeoTransform::default(),
+                crs: None,
+                wavelength_m: SENTINEL1_WAVELENGTH_M,
+                incidence_deg,
+                heading_deg: Some(heading_deg),
+            };
+            let asc = insar_core::io::read_velocity(&asc_los, meta_for(asc_incidence_deg, asc_heading_deg))?;
+            let desc =
+                insar_core::io::read_velocity(&desc_los, meta_for(desc_incidence_deg, desc_heading_deg))?;
+
+            let geom_asc = LosVector::from_incidence_heading(asc_incidence_deg, asc_heading_deg);
+            let geom_desc = LosVector::from_incidence_heading(desc_incidence_deg, desc_heading_deg);
+            let decomposed = decompose_asc_desc(&asc.data, geom_asc, &desc.data, geom_desc)?;
+
+            std::fs::create_dir_all(&output)?;
+            let wrap = |d| insar_core::types::VelocityMap { data: d, meta: asc.meta.clone() };
+            insar_core::io::write_velocity(&wrap(decomposed.up), &output.join("up.tif"))?;
+            insar_core::io::write_velocity(&wrap(decomposed.east), &output.join("east.tif"))?;
+            println!("escrito: {}/up.tif + east.tif", output.display());
+        }
+        Command::Features {
+            series_dir,
+            output,
+            wavelength_m,
+            no_seasonal,
+            no_acceleration,
+            min_valid_epochs,
+            csv,
+        } => {
+            use insar_core::features::{FeatureConfig, extract_features};
+            use insar_core::types::StackMeta;
+
+            let meta = StackMeta {
+                transform: surtgis_core::GeoTransform::default(),
+                crs: None,
+                wavelength_m,
+                incidence_deg: 0.0,
+                heading_deg: None,
+            };
+            let series = insar_core::io::read_series(&series_dir, meta)?;
+            let config = FeatureConfig {
+                seasonal: !no_seasonal,
+                acceleration: !no_acceleration,
+                min_valid_epochs,
+            };
+            let maps = extract_features(&series, None, &config)?;
+
+            std::fs::create_dir_all(&output)?;
+            maps.write_geotiffs(&output)?;
+            let mut extra = String::new();
+            if csv {
+                let csv_path = output.join("features.csv");
+                maps.write_features_csv(None, &csv_path)?;
+                extra.push_str(" + features.csv");
+            }
+            println!(
+                "escrito: {}/{{{}}}.tif{extra}",
+                output.display(),
+                maps.feature_names().join(",")
+            );
+        }
+        Command::Deramp { series_dir, output, kind, wavelength_m } => {
+            use insar_core::postprocess::deramp_series;
+            use insar_core::types::StackMeta;
+
+            let meta = StackMeta {
+                transform: surtgis_core::GeoTransform::default(),
+                crs: None,
+                wavelength_m,
+                incidence_deg: 0.0,
+                heading_deg: None,
+            };
+            let mut series = insar_core::io::read_series(&series_dir, meta)?;
+            deramp_series(&mut series, kind.into(), None)?;
+            insar_core::io::write_series(&series, &output)?;
+            println!("escrito: {}/ (serie deramp)", output.display());
         }
         Command::Isce {
             input,

@@ -56,7 +56,7 @@ pub mod isce;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use ndarray::{Array3, Axis};
+use ndarray::{Array2, Array3, Axis};
 use num_complex::Complex32;
 use serde::Deserialize;
 use surtgis_core::Raster;
@@ -66,6 +66,12 @@ use crate::error::{InsarError, Result};
 use crate::types::{
     AmplitudeStack, DisplacementSeries, Epoch, IfgPair, IfgStack, StackMeta, VelocityMap,
 };
+
+/// Prefijo de archivo usado por [`write_series`]/[`read_series`]
+/// (`disp_YYYYMMDD.tif`).
+const SERIES_FILE_PREFIX: &str = "disp_";
+/// Formato de fecha del nombre de archivo (`chrono::NaiveDate::parse_from_str`).
+const SERIES_DATE_FORMAT: &str = "%Y%m%d";
 
 /// Nombre del manifiesto dentro del directorio del stack.
 const MANIFEST_NAME: &str = "stack.json";
@@ -382,11 +388,75 @@ pub fn write_series(series: &DisplacementSeries, dir: &Path) -> Result<()> {
     for (i, epoch) in series.epochs.iter().enumerate() {
         let layer = series.data.index_axis(Axis(0), i);
         let raster = raster_from_layer(layer, &series.meta)?;
-        let path = dir.join(format!("disp_{}.tif", epoch.0.format("%Y%m%d")));
+        let path = dir.join(format!(
+            "{SERIES_FILE_PREFIX}{}.tif",
+            epoch.0.format(SERIES_DATE_FORMAT)
+        ));
         write_geotiff(&raster, &path, None)
             .map_err(|e| InsarError::Raster(format!("{}: {e}", path.display())))?;
     }
     Ok(())
+}
+
+/// Lee un mapa de velocidad LOS (m/año) desde un GeoTIFF Float32 de 1 banda —
+/// inverso de [`write_velocity`].
+///
+/// El GeoTIFF no guarda `wavelength_m`/`incidence_deg`/`heading_deg` (no son
+/// geográficos): se toman de `meta`. `transform`/`crs` se toman del archivo
+/// (georreferencia real), descartando los de `meta`.
+pub fn read_velocity(path: &Path, meta: StackMeta) -> Result<VelocityMap> {
+    let raster = read_f32(path)?;
+    let (rows, cols) = raster.shape();
+    let data = Array2::from_shape_vec((rows, cols), raster.data().iter().copied().collect())
+        .map_err(|e| InsarError::DimensionMismatch(e.to_string()))?;
+    let meta = StackMeta { transform: *raster.transform(), crs: raster.crs().cloned(), ..meta };
+    Ok(VelocityMap { data, meta })
+}
+
+/// Lee una serie de desplazamiento desde `dir` — inverso de [`write_series`]:
+/// un GeoTIFF Float32 por época nombrado `disp_YYYYMMDD.tif`. Las épocas se
+/// derivan de los nombres de archivo (orden ascendente por fecha, no por
+/// orden del directorio); `wavelength_m`/`incidence_deg`/`heading_deg` de
+/// `meta` (no georreferenciados, no se guardan en el GeoTIFF); `transform`/
+/// `crs` del primer archivo (por fecha).
+pub fn read_series(dir: &Path, meta: StackMeta) -> Result<DisplacementSeries> {
+    let mut entries: Vec<(Epoch, PathBuf)> = fs::read_dir(dir)?
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let path = e.path();
+            let stem = path.file_stem()?.to_str()?;
+            let day = stem.strip_prefix(SERIES_FILE_PREFIX)?;
+            let date = chrono::NaiveDate::parse_from_str(day, SERIES_DATE_FORMAT).ok()?;
+            Some((Epoch(date), path))
+        })
+        .collect();
+    if entries.is_empty() {
+        return Err(InsarError::Metadata(format!(
+            "{}: no se encontraron archivos {SERIES_FILE_PREFIX}YYYYMMDD.tif",
+            dir.display()
+        )));
+    }
+    entries.sort_by_key(|(epoch, _)| *epoch);
+
+    let mut dims: Option<(usize, usize)> = None;
+    let mut geo: Option<(surtgis_core::GeoTransform, Option<surtgis_core::CRS>)> = None;
+    let mut values: Vec<f32> = Vec::with_capacity(entries.len());
+    let mut epochs = Vec::with_capacity(entries.len());
+    for (epoch, path) in &entries {
+        let raster = read_f32(path)?;
+        let expected = *dims.get_or_insert_with(|| raster.shape());
+        check_dims(path, raster.shape(), expected)?;
+        geo.get_or_insert_with(|| (*raster.transform(), raster.crs().cloned()));
+        values.extend(raster.data().iter().copied());
+        epochs.push(*epoch);
+    }
+
+    let (rows, cols) = dims.expect("dims definidas: entries no vacío");
+    let (transform, crs) = geo.expect("geo definida: entries no vacío");
+    let data = Array3::from_shape_vec((entries.len(), rows, cols), values)
+        .map_err(|e| InsarError::DimensionMismatch(e.to_string()))?;
+    let meta = StackMeta { transform, crs, ..meta };
+    Ok(DisplacementSeries { data, epochs, meta })
 }
 
 // ---------------------------------------------------------------------------
@@ -631,6 +701,108 @@ mod tests {
             }
         }
         let _ = fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    #[test]
+    fn round_trip_velocity_read() {
+        let dir = temp_dir("vel_rt_read");
+        let data = Array2::from_shape_fn((ROWS, COLS), |(r, c)| synth(0, r, c));
+        let written = VelocityMap {
+            data: data.clone(),
+            meta: StackMeta {
+                transform: test_transform(),
+                crs: Some(test_crs()),
+                wavelength_m: crate::types::SENTINEL1_WAVELENGTH_M,
+                incidence_deg: 39.0,
+                heading_deg: Some(190.0),
+            },
+        };
+        let path = dir.join("velocity.tif");
+        write_velocity(&written, &path).unwrap();
+
+        // meta pasada al reader: solo importan wavelength/incidence/heading
+        // (transform/crs se sobrescriben desde el archivo).
+        let caller_meta = StackMeta {
+            transform: surtgis_core::GeoTransform::default(),
+            crs: None,
+            wavelength_m: crate::types::SENTINEL1_WAVELENGTH_M,
+            incidence_deg: 39.0,
+            heading_deg: Some(190.0),
+        };
+        let back = read_velocity(&path, caller_meta).unwrap();
+        assert_eq!(back.data.dim(), (ROWS, COLS));
+        assert_eq!(back.meta.transform, test_transform());
+        assert_eq!(back.meta.crs, Some(test_crs()));
+        assert_eq!(back.meta.wavelength_m, written.meta.wavelength_m);
+        assert_eq!(back.meta.heading_deg, written.meta.heading_deg);
+        for r in 0..ROWS {
+            for c in 0..COLS {
+                assert_f32_eq_nan(back.data[[r, c]], data[[r, c]], &format!("vel[{r},{c}]"));
+            }
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn round_trip_series_read() {
+        let dir = temp_dir("ser_rt_read");
+        let epochs = expected_epochs();
+        let data = Array3::from_shape_fn((3, ROWS, COLS), |(k, r, c)| synth(k, r, c));
+        let written = DisplacementSeries {
+            data: data.clone(),
+            epochs: epochs.clone(),
+            meta: StackMeta {
+                transform: test_transform(),
+                crs: Some(test_crs()),
+                wavelength_m: crate::types::SENTINEL1_WAVELENGTH_M,
+                incidence_deg: 39.0,
+                heading_deg: None,
+            },
+        };
+        write_series(&written, &dir).unwrap();
+
+        let caller_meta = StackMeta {
+            transform: surtgis_core::GeoTransform::default(),
+            crs: None,
+            wavelength_m: crate::types::SENTINEL1_WAVELENGTH_M,
+            incidence_deg: 39.0,
+            heading_deg: None,
+        };
+        let back = read_series(&dir, caller_meta).unwrap();
+        assert_eq!(back.epochs, epochs);
+        assert_eq!(back.meta.transform, test_transform());
+        assert_eq!(back.meta.crs, Some(test_crs()));
+        for k in 0..3 {
+            for r in 0..ROWS {
+                for c in 0..COLS {
+                    assert_f32_eq_nan(
+                        back.data[[k, r, c]],
+                        data[[k, r, c]],
+                        &format!("ser[{k},{r},{c}]"),
+                    );
+                }
+            }
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_series_dir_vacio_es_error() {
+        let dir = temp_dir("ser_rt_empty");
+        fs::create_dir_all(&dir).unwrap();
+        let err = read_series(
+            &dir,
+            StackMeta {
+                transform: surtgis_core::GeoTransform::default(),
+                crs: None,
+                wavelength_m: crate::types::SENTINEL1_WAVELENGTH_M,
+                incidence_deg: 39.0,
+                heading_deg: None,
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, InsarError::Metadata(_)), "got: {err:?}");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

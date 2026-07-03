@@ -79,6 +79,95 @@ def test_nan_propaga_sin_romper():
     assert np.isfinite(series[1:, 0, 0]).all()
 
 
+def los_vector(incidence_deg, heading_deg):
+    """Espejo de insar_core::decompose::LosVector::from_incidence_heading."""
+    th = np.radians(incidence_deg)
+    a = np.radians(heading_deg)
+    return {"up": np.cos(th), "east": -np.sin(th) * np.cos(a)}
+
+
+def test_decompose_asc_desc_recupera_up_east():
+    up_true, east_true = 1.0, 0.5
+    g_asc = los_vector(39.0, 349.0)
+    g_desc = los_vector(39.0, 191.0)
+    los_asc = np.full((2, 3), up_true * g_asc["up"] + east_true * g_asc["east"], dtype=np.float32)
+    los_desc = np.full((2, 3), up_true * g_desc["up"] + east_true * g_desc["east"], dtype=np.float32)
+
+    up, east = insar_rs.decompose_asc_desc(los_asc, 39.0, 349.0, los_desc, 39.0, 191.0)
+    assert up.shape == (2, 3)
+    assert east.shape == (2, 3)
+    np.testing.assert_allclose(up, up_true, atol=1e-4)
+    np.testing.assert_allclose(east, east_true, atol=1e-4)
+
+
+def test_decompose_per_pixel_geometria_constante_coincide_con_asc_desc():
+    up_true, east_true = 1.0, 0.5
+    g_asc = los_vector(39.0, 349.0)
+    g_desc = los_vector(39.0, 191.0)
+    los_asc = np.full((2, 3), up_true * g_asc["up"] + east_true * g_asc["east"], dtype=np.float32)
+    los_desc = np.full((2, 3), up_true * g_desc["up"] + east_true * g_desc["east"], dtype=np.float32)
+
+    inc = np.full((2, 3), 39.0, dtype=np.float32)
+    head_asc = np.full((2, 3), 349.0, dtype=np.float32)
+    head_desc = np.full((2, 3), 191.0, dtype=np.float32)
+
+    up, east = insar_rs.decompose_per_pixel(
+        [los_asc, los_desc], [inc, inc], [head_asc, head_desc]
+    )
+    np.testing.assert_allclose(up, up_true, atol=1e-4)
+    np.testing.assert_allclose(east, east_true, atol=1e-4)
+
+
+def test_extract_features_esquema_y_velocidad():
+    epoch_days = [0, 12, 24, 36, 48]
+    v_true = -0.05
+    t = np.array(epoch_days, dtype=np.float64) / 365.25
+    series = (v_true * t).astype(np.float32).reshape(-1, 1, 1)
+
+    features = insar_rs.extract_features(series, epoch_days)
+    assert set(features) == {
+        "velocity",
+        "velocity_std",
+        "acceleration",
+        "linearity_r2",
+        "residual_rms",
+        "cumulative",
+        "seasonal_amplitude",
+        "seasonal_phase",
+        "max_step",
+    }
+    assert features["velocity"].shape == (1, 1)
+    np.testing.assert_allclose(features["velocity"][0, 0], v_true, atol=1e-4)
+
+    # seasonal=False achica el esquema (determinista, no depende de los datos).
+    reduced = insar_rs.extract_features(series, epoch_days, seasonal=False)
+    assert "seasonal_amplitude" not in reduced
+
+
+def test_remove_ramp_quita_plano_exacto():
+    rows, cols = 5, 6
+    r, c = np.meshgrid(np.arange(rows), np.arange(cols), indexing="ij")
+    data = (0.1 * r + 0.2 * c + 3.0).astype(np.float32)
+
+    flat = insar_rs.remove_ramp(data, "linear")
+    assert flat.shape == data.shape
+    np.testing.assert_allclose(flat, 0.0, atol=1e-4)
+
+    with pytest.raises(ValueError):
+        insar_rs.remove_ramp(data, "cubic")
+
+
+def test_correct_unwrap_errors_sin_saltos_no_corrige():
+    phase = synthetic_phase()
+    corrected_phase, corrected, detected_uncorrected = insar_rs.correct_unwrap_errors(
+        phase, REFS, SECS
+    )
+    assert corrected_phase.shape == phase.shape
+    assert corrected == 0
+    assert detected_uncorrected == 0
+    np.testing.assert_allclose(corrected_phase, phase, atol=1e-5)
+
+
 def test_errores_idiomaticos():
     # Largo inconsistente => ValueError.
     with pytest.raises(ValueError):
