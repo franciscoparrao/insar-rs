@@ -33,6 +33,10 @@ clap = { version = "4", features = ["derive"] }
 # parser XML read-only (para .vrt de ISCE) — sin deps transitivas
 roxmltree = "0.20"
 
+# mmap de solo lectura para el camino ISCE (io::isce): evita fs::read del
+# archivo .unw/.int completo a un Vec<u8> — ver G-9 en la auditoría.
+memmap2 = "0.9"
+
 # I/O raster: GeoTIFF nativo puro Rust (sin GDAL) + helpers de rasters complejos
 # path para desarrollo local; version para `cargo publish` (requiere surtgis-core
 # publicado en crates.io — ver CHANGELOG y auditoría C-1).

@@ -232,13 +232,31 @@ fn parse_child_u64(node: &roxmltree::Node, tag: &str, path: &Path) -> Result<u64
         })
 }
 
+/// Mapea `path` en memoria de solo lectura en vez de copiarlo entero a un
+/// `Vec<u8>` (`fs::read`): `decode_raw_with`/`decode_raw_band` ya operan
+/// sobre `&[u8]` (`Mmap: Deref<Target = [u8]>`), así que el resto del
+/// pipeline de decodificación es idéntico. Evita duplicar en RAM el
+/// contenido completo de rasters `.unw`/`.int` que pueden pesar cientos de
+/// MB (ver G-9 en la auditoría).
+///
+/// # Safety (del `unsafe` interno)
+/// `Mmap::map` es unsafe porque el kernel no garantiza que el archivo no
+/// sea truncado/modificado por otro proceso mientras está mapeado (UB si
+/// ocurre). Aceptable aquí: los productos ISCE son archivos de salida ya
+/// escritos por un proceso externo (topsStack/HyP3) antes de que insar-rs
+/// los lea, no archivos mutados concurrentemente durante la lectura.
+fn mmap_file(path: &Path) -> Result<memmap2::Mmap> {
+    let file = fs::File::open(path)?;
+    Ok(unsafe { memmap2::Mmap::map(&file)? })
+}
+
 /// Lee una banda (1-based) de un raster crudo como `Array2<f32>`
 /// (filas = height, cols = width). Soporta `Float32` y `Float64` (este
 /// último casteado a f32: precisión relativa ~1e-7, sub-métrica para
 /// lat/lon/geometría — documentado).
 pub(crate) fn read_raw_band(layout: &VrtLayout, band_1based: usize) -> Result<Array2<f32>> {
     let band = get_band(layout, band_1based, &["Float32", "Float64"])?;
-    let raw = fs::read(&band.source)?;
+    let raw = mmap_file(&band.source)?;
     decode_raw_band(&raw, layout, band_1based)
 }
 
@@ -249,7 +267,7 @@ pub(crate) fn read_raw_band_complex(
     band_1based: usize,
 ) -> Result<Array2<Complex32>> {
     let band = get_band(layout, band_1based, &["CFloat32"])?;
-    let raw = fs::read(&band.source)?;
+    let raw = mmap_file(&band.source)?;
     decode_raw_with(&raw, layout, band, band_1based, 8, |b, lsb| {
         let (re, im) = if lsb {
             (le_f32(&b[0..4]), le_f32(&b[4..8]))
@@ -264,7 +282,7 @@ pub(crate) fn read_raw_band_complex(
 /// conexas del desenrollado).
 pub(crate) fn read_raw_band_byte(layout: &VrtLayout, band_1based: usize) -> Result<Array2<u8>> {
     let band = get_band(layout, band_1based, &["Byte"])?;
-    let raw = fs::read(&band.source)?;
+    let raw = mmap_file(&band.source)?;
     decode_raw_with(&raw, layout, band, band_1based, 1, |b, _| b[0])
 }
 
@@ -469,7 +487,7 @@ fn read_unw_phase_masked(layout: &VrtLayout) -> Result<Array2<f32>> {
     let b1 = &layout.bands[0];
     let b2 = get_band(layout, 2, &["Float32", "Float64"])?;
 
-    let raw = fs::read(&b2.source)?;
+    let raw = mmap_file(&b2.source)?;
     let mut phase = decode_raw_band(&raw, layout, 2)?;
     let amp = if b1.source == b2.source {
         decode_raw_band(&raw, layout, 1)?

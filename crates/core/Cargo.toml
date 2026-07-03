@@ -24,6 +24,7 @@ serde.workspace = true
 serde_json.workspace = true
 surtgis-core.workspace = true
 roxmltree.workspace = true
+memmap2.workspace = true
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

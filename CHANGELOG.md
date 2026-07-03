@@ -5,6 +5,20 @@ versionado: [SemVer](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Escalabilidad de memoria: mmap del camino ISCE (G-9 del backlog v0.2)
+
+Investigación previa (3 agentes en paralelo) acotó el alcance: el unwrap 2D
+(flood-fill) bloquea el tiling espacial completo sin rediseño; `surtgis-core`
+no soporta lectura por ventana (cross-repo, fuera de alcance). Se implementó
+la parte autocontenida y de bajo riesgo — ver `docs/auditoria-2026-07-02.md`
+(G-9) para el detalle de la decisión y lo diferido.
+
+- `io::isce`: `read_raw_band`/`read_raw_band_complex`/`read_raw_band_byte`/
+  `read_unw_phase_masked` mapean el archivo con `memmap2` en vez de
+  `fs::read` a un `Vec<u8>` — evita duplicar en RAM el contenido de rasters
+  `.unw`/`.int`. Primer `unsafe` del crate (inevitable para mmap, acotado a
+  una función de 3 líneas con la invariante documentada).
+
 ### Exponer los diferenciadores (G-17 del backlog v0.2)
 
 `features`, `decompose` y `deramp` (`postprocess::remove_ramp`/
