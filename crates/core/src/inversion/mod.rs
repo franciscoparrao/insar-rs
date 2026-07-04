@@ -614,13 +614,32 @@ fn reduced_pinv(
 /// (media de las capas finitas por píxel; empates → menor (fila, col) para
 /// determinismo). `coh`: pares × filas × cols. `None` si ningún píxel tiene
 /// coherencia finita. Compartido por el pipeline, la CLI y los bindings.
-pub fn select_reference_pixel(coh: &Array3<f32>) -> Option<(usize, usize)> {
+///
+/// `region`: si se da, restringe la búsqueda a los píxeles `true` de esta
+/// máscara (mismas dims que `coh`). Necesario porque el stack de entrada
+/// puede cubrir un área mucho más grande que el AOI real de interés — el
+/// bbox de `stackSentinel.py`/topsStack, por ejemplo, solo filtra qué bursts
+/// entran, no recorta el producto final — y sin restricción la auto-selección
+/// puede caer arbitrariamente lejos del área que importa, con coherencia alta
+/// pero sin relación con lo que se está midiendo (visto en producción:
+/// referencia a 25 km del AOI, sobre un vacío de DEM). `None` también si
+/// `region` no coincide en dimensiones con `coh` o no deja ningún píxel.
+pub fn select_reference_pixel(
+    coh: &Array3<f32>,
+    region: Option<&Array2<bool>>,
+) -> Option<(usize, usize)> {
     let (n_pairs, n_rows, n_cols) = coh.dim();
+    if region.is_some_and(|m| m.dim() != (n_rows, n_cols)) {
+        return None;
+    }
     (0..n_rows)
         .into_par_iter()
         .map(|r| {
             let mut best: Option<(f32, (usize, usize))> = None;
             for c in 0..n_cols {
+                if region.is_some_and(|m| !m[[r, c]]) {
+                    continue;
+                }
                 let (mut sum, mut n) = (0.0_f64, 0u32);
                 for k in 0..n_pairs {
                     let v = coh[[k, r, c]];
@@ -1779,11 +1798,35 @@ mod tests {
         let mut coh = Array3::from_elem((2, 3, 4), 0.5_f32);
         coh[[0, 1, 2]] = 0.9;
         coh[[1, 1, 2]] = 0.9;
-        assert_eq!(select_reference_pixel(&coh), Some((1, 2)));
+        assert_eq!(select_reference_pixel(&coh, None), Some((1, 2)));
 
         // Todo NaN → None.
         let nan = Array3::from_elem((2, 2, 2), f32::NAN);
-        assert_eq!(select_reference_pixel(&nan), None);
+        assert_eq!(select_reference_pixel(&nan, None), None);
+    }
+
+    #[test]
+    fn referencia_respeta_region() {
+        // El píxel de mejor coherencia global (1,2) queda fuera de la región;
+        // dentro de la región, el mejor es (0,0).
+        let mut coh = Array3::from_elem((2, 3, 4), 0.5_f32);
+        coh[[0, 1, 2]] = 0.9;
+        coh[[1, 1, 2]] = 0.9;
+        coh[[0, 0, 0]] = 0.7;
+        coh[[1, 0, 0]] = 0.7;
+
+        let mut region = Array2::from_elem((3, 4), false);
+        region[[0, 0]] = true;
+        region[[0, 1]] = true;
+        assert_eq!(select_reference_pixel(&coh, Some(&region)), Some((0, 0)));
+
+        // Región sin ningún píxel true → None.
+        let vacia = Array2::from_elem((3, 4), false);
+        assert_eq!(select_reference_pixel(&coh, Some(&vacia)), None);
+
+        // Región con dims distintas a `coh` → None (no se ignora en silencio).
+        let mismatch = Array2::from_elem((2, 2), true);
+        assert_eq!(select_reference_pixel(&coh, Some(&mismatch)), None);
     }
 
     // ---------- estimate_velocity ----------

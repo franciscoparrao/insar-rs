@@ -34,6 +34,17 @@ enum UnwrapBackendArg {
     Snaphu,
 }
 
+/// Convierte los 4 valores de `--ref-region` en `(fila_min, col_min, fila_max,
+/// col_max)`, validando fila_min<=fila_max y col_min<=col_max. `clap` ya
+/// garantiza exactamente 4 elementos (`num_args = 4`).
+fn parse_ref_region(v: Vec<usize>) -> anyhow::Result<(usize, usize, usize, usize)> {
+    let [r0, c0, r1, c1] = v[..] else { unreachable!("num_args=4") };
+    if r0 > r1 || c0 > c1 {
+        anyhow::bail!("--ref-region inválido: mín ({r0},{c0}) > máx ({r1},{c1})");
+    }
+    Ok((r0, c0, r1, c1))
+}
+
 #[derive(Subcommand)]
 enum Command {
     /// Muestra metadata de un stack de interferogramas
@@ -79,6 +90,21 @@ enum Command {
         /// Desactiva la corrección de errores de desenrollado por cierre de fase
         #[arg(long)]
         no_closure_correction: bool,
+        /// Píxel de referencia manual (fila) — junto con --ref-col, se usa
+        /// directo y se salta la auto-selección por coherencia
+        #[arg(long, requires = "ref_col")]
+        ref_row: Option<usize>,
+        /// Píxel de referencia manual (columna) — ver --ref-row
+        #[arg(long, requires = "ref_row")]
+        ref_col: Option<usize>,
+        /// Restringe la auto-selección de referencia a este rectángulo de
+        /// píxeles (FILA_MIN COL_MIN FILA_MAX COL_MAX), inclusivo. Evita que
+        /// caiga fuera del AOI real cuando el stack cubre un área mucho más
+        /// grande que la de interés (p. ej. bbox de stackSentinel.py, que
+        /// solo filtra bursts y no recorta el producto final). Ignorado si
+        /// se da --ref-row/--ref-col
+        #[arg(long, num_args = 4, value_names = ["FILA_MIN", "COL_MIN", "FILA_MAX", "COL_MAX"])]
+        ref_region: Option<Vec<usize>>,
     },
     /// Descompone LOS ascendente + descendente en (Up, East) — geometría escalar
     Decompose {
@@ -159,6 +185,19 @@ enum Command {
         /// Desactiva la corrección de errores de desenrollado por cierre de fase
         #[arg(long)]
         no_closure_correction: bool,
+        /// Píxel de referencia manual (fila) — junto con --ref-col, se usa
+        /// directo y se salta la auto-selección por coherencia
+        #[arg(long, requires = "ref_col")]
+        ref_row: Option<usize>,
+        /// Píxel de referencia manual (columna) — ver --ref-row
+        #[arg(long, requires = "ref_row")]
+        ref_col: Option<usize>,
+        /// Restringe la auto-selección de referencia a este rectángulo de
+        /// píxeles (FILA_MIN COL_MIN FILA_MAX COL_MAX), inclusivo. Evita que
+        /// caiga fuera del AOI real cuando el stack cubre un área mucho más
+        /// grande que la de interés. Ignorado si se da --ref-row/--ref-col
+        #[arg(long, num_args = 4, value_names = ["FILA_MIN", "COL_MIN", "FILA_MAX", "COL_MAX"])]
+        ref_region: Option<Vec<usize>>,
     },
 }
 
@@ -195,9 +234,17 @@ fn main() -> anyhow::Result<()> {
             snaphu_bin,
             deramp,
             no_closure_correction,
+            ref_row,
+            ref_col,
+            ref_region,
         } => {
             use insar_core::pipeline::UnwrapBackend;
             use insar_core::unwrap::snaphu::SnaphuConfig;
+
+            if ref_row.is_some() && ref_region.is_some() {
+                anyhow::bail!("--ref-row/--ref-col y --ref-region son mutuamente excluyentes");
+            }
+            let reference_region = ref_region.map(parse_ref_region).transpose()?;
 
             let unwrap_backend = match unwrap_backend {
                 UnwrapBackendArg::FloodFill => UnwrapBackend::FloodFill,
@@ -215,6 +262,8 @@ fn main() -> anyhow::Result<()> {
                 unwrap_backend,
                 correct_unwrap: !no_closure_correction,
                 deramp: deramp.map(RampKind::from),
+                reference: ref_row.zip(ref_col),
+                reference_region,
                 ..SbasPipelineConfig::new(input, output.clone())
             };
             let products = run_sbas(&config)?;
@@ -334,6 +383,9 @@ fn main() -> anyhow::Result<()> {
             dem_error_range,
             deramp,
             no_closure_correction,
+            ref_row,
+            ref_col,
+            ref_region,
         } => {
             use insar_core::inversion::{
                 DemErrorConfig, IrlsConfig, SbasSolverConfig, WeightScheme, invert_sbas_ext,
@@ -342,6 +394,11 @@ fn main() -> anyhow::Result<()> {
             use insar_core::io::isce::{
                 IsceLoadConfig, read_isce_coherence, read_isce_unwrapped_stack,
             };
+
+            if ref_row.is_some() && ref_region.is_some() {
+                anyhow::bail!("--ref-row/--ref-col y --ref-region son mutuamente excluyentes");
+            }
+            let reference_region = ref_region.map(parse_ref_region).transpose()?;
 
             let config = IsceLoadConfig { baselines_dir: baselines, ..Default::default() };
             let mut stack = read_isce_unwrapped_stack(&input, &config)?;
@@ -376,11 +433,25 @@ fn main() -> anyhow::Result<()> {
                 Some(insar_core::unwrap_error::nonzero_closure_count(&stack)?)
             };
 
-            // Píxel de referencia: máxima coherencia media, o el centro.
-            let (ref_r, ref_c) = coherence
-                .as_ref()
-                .and_then(select_reference_pixel)
-                .unwrap_or((rows / 2, cols / 2));
+            // Píxel de referencia: manual > auto (máxima coherencia media,
+            // opcionalmente restringida a --ref-region) > el centro.
+            let (ref_r, ref_c) = if let (Some(r), Some(c)) = (ref_row, ref_col) {
+                (r, c)
+            } else {
+                let region_mask = reference_region.map(|(r0, c0, r1, c1)| {
+                    let mut mask = ndarray::Array2::from_elem((rows, cols), false);
+                    for r in r0..=r1.min(rows.saturating_sub(1)) {
+                        for c in c0..=c1.min(cols.saturating_sub(1)) {
+                            mask[[r, c]] = true;
+                        }
+                    }
+                    mask
+                });
+                coherence
+                    .as_ref()
+                    .and_then(|coh| select_reference_pixel(coh, region_mask.as_ref()))
+                    .unwrap_or((rows / 2, cols / 2))
+            };
             println!("referencia: ({ref_r}, {ref_c})");
             insar_core::inversion::reference_to_pixel(&mut stack, ref_r, ref_c)?;
 

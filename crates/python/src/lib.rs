@@ -268,7 +268,7 @@ fn sbas_from_isce<'py>(
             let (n_rows, n_cols) = stack.dims();
             let (ref_r, ref_c) = read_isce_coherence(dir, &config)
                 .ok()
-                .and_then(|coh| insar_core::inversion::select_reference_pixel(&coh))
+                .and_then(|coh| insar_core::inversion::select_reference_pixel(&coh, None))
                 .unwrap_or((n_rows / 2, n_cols / 2));
             insar_core::inversion::reference_to_pixel(&mut stack, ref_r, ref_c)?;
 

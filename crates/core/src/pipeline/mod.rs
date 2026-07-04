@@ -103,6 +103,14 @@ pub struct SbasPipelineConfig {
     /// Píxel de referencia (fila, col). `None` = automático: máxima
     /// coherencia media si hay coherencia; sin referenciar si no la hay.
     pub reference: Option<(usize, usize)>,
+    /// Restringe la auto-selección (cuando `reference` es `None`) a este
+    /// rectángulo `(fila_min, col_min, fila_max, col_max)`, inclusivo.
+    /// Necesario cuando el stack cubre un área mucho más grande que el AOI
+    /// real (p. ej. el bbox de `stackSentinel.py` solo filtra bursts, no
+    /// recorta el producto final) — sin esto la auto-selección puede caer
+    /// arbitrariamente lejos del área de interés. Ignorado si `reference`
+    /// ya viene fijado manualmente.
+    pub reference_region: Option<(usize, usize, usize, usize)>,
     /// Solver de la inversión: pesos WLS y/o error de DEM.
     pub solver: SbasSolverConfig,
     /// Deramp de cada época de la serie tras las correcciones (`None` = no).
@@ -123,6 +131,7 @@ impl SbasPipelineConfig {
             unwrap_backend: UnwrapBackend::default(),
             correct_unwrap: true,
             reference: None,
+            reference_region: None,
             solver: SbasSolverConfig::default(),
             deramp: None,
         }
@@ -220,11 +229,22 @@ pub fn run_sbas(config: &SbasPipelineConfig) -> Result<SbasProducts> {
         (None, None)
     };
 
-    // 5) Referenciado espacial (configurado > automático por coherencia).
+    // 5) Referenciado espacial (configurado > automático por coherencia,
+    //    opcionalmente restringido a `reference_region`).
     let reference = config.reference.or_else(|| {
+        let (n_rows, n_cols) = unwrapped.dims();
+        let region_mask = config.reference_region.map(|(r0, c0, r1, c1)| {
+            let mut mask = Array2::from_elem((n_rows, n_cols), false);
+            for r in r0..=r1.min(n_rows.saturating_sub(1)) {
+                for c in c0..=c1.min(n_cols.saturating_sub(1)) {
+                    mask[[r, c]] = true;
+                }
+            }
+            mask
+        });
         coherence
             .as_ref()
-            .and_then(inversion::select_reference_pixel)
+            .and_then(|coh| inversion::select_reference_pixel(coh, region_mask.as_ref()))
     });
     if let Some((r, c)) = reference {
         inversion::reference_to_pixel(&mut unwrapped, r, c)?;
