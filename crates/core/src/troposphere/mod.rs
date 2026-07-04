@@ -10,6 +10,11 @@
 //! La rampa orbital se trata aparte ([`crate::postprocess::remove_ramp`]); aquí
 //! se puede incluir un plano en el AJUSTE (`with_ramp`) para que no sesgue la
 //! pendiente fase-elevación, pero solo se resta el término topográfico.
+//!
+//! Ver también [`era5`] (G-7): corrección estratificada por modelo físico
+//! (reanálisis) en vez de esta regresión empírica.
+
+pub mod era5;
 
 use nalgebra::{DMatrix, DVector};
 use ndarray::{Array2, Axis};
