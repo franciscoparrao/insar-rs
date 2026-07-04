@@ -50,7 +50,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use chrono::NaiveDate;
-use ndarray::{Array2, Array3};
+use ndarray::{Array2, Array3, Zip};
 use num_complex::Complex32;
 use surtgis_core::GeoTransform;
 
@@ -574,10 +574,46 @@ pub fn read_isce_wrapped_stack(dir: &Path, config: &IsceLoadConfig) -> Result<If
 /// Lee la coherencia (banda 1 de cada `.cor`) alineada con los pares del
 /// stack, en el mismo orden que `read_isce_unwrapped_stack`.
 /// `data`: pares × filas × cols.
+///
+/// Con [`IsceLoadConfig::mask_zero_amplitude`] (default `true`) aplica el
+/// mismo enmascarado que la fase: los píxeles con amplitud (banda 1 del
+/// `.unw` del mismo par) 0 quedan NaN. Sin esto, franjas fuera del footprint
+/// geocodificado (amplitud 0, fase enmascarada a NaN) pueden traer coherencia
+/// espuria — incluida cerca de 1.0 — y ganar la selección de píxel de
+/// referencia ([`crate::inversion::select_reference_pixel`]) pese a no tener
+/// ninguna fase válida, dejando la serie entera en NaN tras referenciar.
 pub fn read_isce_coherence(dir: &Path, config: &IsceLoadConfig) -> Result<Array3<f32>> {
     // Mismo descubrimiento y ORDEN que read_isce_unwrapped_stack.
     let pair_dirs = list_pair_dirs(dir)?;
-    stack_pair_layers(&pair_dirs, &config.cor_filename, |layout| read_raw_band(layout, 1))
+    stack_pair_layers(&pair_dirs, &config.cor_filename, |layout| {
+        let mut coh = read_raw_band(layout, 1)?;
+        if config.mask_zero_amplitude {
+            let cor_source = &layout.bands[0].source;
+            let pair_dir = cor_source.parent().ok_or_else(|| {
+                InsarError::UnsupportedFormat(format!(
+                    "{}: sin directorio padre para ubicar el .unw del par",
+                    cor_source.display()
+                ))
+            })?;
+            let unw_vrt = pair_dir.join(format!("{}.vrt", config.unw_filename));
+            let unw_layout = parse_vrt(&unw_vrt)?;
+            let amp = read_raw_band(&unw_layout, 1)?;
+            if amp.dim() != coh.dim() {
+                return Err(InsarError::DimensionMismatch(format!(
+                    "{}: {:?} difiere de la coherencia {:?}",
+                    unw_vrt.display(),
+                    amp.dim(),
+                    coh.dim()
+                )));
+            }
+            Zip::from(&mut coh).and(&amp).for_each(|c, &a| {
+                if a == 0.0 {
+                    *c = f32::NAN;
+                }
+            });
+        }
+        Ok(coh)
+    })
 }
 
 /// Lee las componentes conexas del desenrollado (`filt_fine.unw.conncomp`,
