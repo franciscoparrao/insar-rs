@@ -18,6 +18,7 @@ __pycache__/
 /validation/maule_summer_export
 /data/maule_summer_sel.json
 /docs/algarrobo/
+/docs/maule/
 /validation/algarrobo_*
 /validation/slcstack
 /SAFE_files.txt

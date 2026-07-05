@@ -54,6 +54,46 @@ Lección reutilizable: en terreno nival/vegetado, **redes estacionales +
 puentes anuales** mantienen la coherencia donde las redes de baseline corto
 pero multi-estación fallan.
 
+## Actualización (2026-07-04): motor auditado (WLS + IRLS + error de DEM)
+
+El resultado de arriba (−21.3 cm/año) se generó con `validate_maule.rs`, que
+invierte por **OLS simple** (`invert_sbas`, sin pesos ni error de DEM) — anterior
+a la auditoría del motor (Sprint 1-4: WLS por coherencia, error de DEM, IRLS
+robusto). Se re-procesó el mismo dato (mismo GUNW, misma red estacional) con
+`validate_maule_audited.rs`, que usa `invert_sbas_ext` con
+`WeightScheme::InversePhaseVariance` + `IrlsConfig` + `DemErrorConfig`, más la
+misma corrección de cierre de fase, troposfera topo-correlacionada y deramp:
+
+| | OLS (jun-2026) | Auditado (WLS+IRLS+DEM-error) |
+|---|---|---|
+| Velocidad LOS pico | −21.3 cm/año | **−25.2 cm/año** (σ = 0.23 cm/año) |
+| Coherencia temporal mediana | 0.92 | 0.82 |
+| Cobertura γ>0.7 | 52 % | 36 % |
+| Error de DEM (media, píxeles coherentes) | — | 1.2 m (std 18 m) |
+
+El pico auditado (−25.2 cm/año) cae **más cerca del centro del rango publicado**
+(18–27 cm/año) que el OLS original, con incertidumbre formal muy ajustada
+(σ=0.23 cm/año — la propagación de covarianza, no un supuesto i.i.d. ingenuo).
+La serie temporal en el píxel de pico es notablemente lineal sobre 3.3 años
+(σ residuo 1.49 cm sobre ~80 cm de desplazamiento total), consistente con
+inflación sostenida a tasa aproximadamente constante.
+
+**Honestidad**: la cobertura coherente baja de 52%→36% y la coherencia mediana
+de 0.92→0.82 — el IRLS robusto y el término de error de DEM son parámetros
+adicionales que, en píxeles de coherencia marginal, pueden sobreajustar y
+degradar el ajuste aparente (mismo patrón visto en El Canelo). El error de DEM
+tiene outliers extremos (máx |.| ~11.5 km) **todos fuera de la máscara
+γ>0.7** — el motor ya los aísla correctamente, no contaminan el resultado
+reportado, pero confirman que WLS+IRLS+DEM-error conjunto sigue sin ser robusto
+fuera de zonas de buena coherencia. Referencia (fila 4, col 702): 100/100
+pares, máxima cobertura+coherencia — no hubo aquí el problema de referencia
+fuera de AOI de El Canelo, porque el GUNW ya viene recortado a la escena.
+
+Reproducir:
+```bash
+cargo run --release -p insar-core --example validate_maule_audited -- validation/maule_summer_export
+```
+
 ## Salar de Atacama — coherencia de clase mundial
 
 Superficie de sal en el desierto más árido del planeta → coherencia temporal
