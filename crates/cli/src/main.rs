@@ -161,6 +161,26 @@ enum Command {
         #[arg(long, default_value_t = insar_core::types::SENTINEL1_WAVELENGTH_M)]
         wavelength_m: f64,
     },
+    /// Corrección de APS turbulento (filtro pasa-alto temporal + pasa-bajo
+    /// espacial, esquema SBAS clásico) standalone sobre una serie ya escrita.
+    /// Es el mismo filtro que 'run' aplica en su paso 7; el camino 'isce' no
+    /// lo aplica (los .unw ya vienen desenrollados y la corrección es
+    /// opcional/posterior), así que este subcomando cierra ese gap.
+    Aps {
+        /// Directorio con la serie (disp_YYYYMMDD.tif)
+        series_dir: PathBuf,
+        /// Directorio de salida
+        output: PathBuf,
+        /// Sigma del filtro gaussiano espacial, en píxeles
+        #[arg(long, default_value_t = 8.0)]
+        spatial_sigma_px: f32,
+        /// Ventana del ajuste lineal local temporal, en épocas (impar)
+        #[arg(long, default_value_t = 5)]
+        temporal_window_epochs: usize,
+        /// Longitud de onda radar en metros
+        #[arg(long, default_value_t = insar_core::types::SENTINEL1_WAVELENGTH_M)]
+        wavelength_m: f64,
+    },
     /// SBAS directo desde interferogramas ISCE (.unw ya desenrollados)
     Isce {
         /// Directorio de interferogramas ISCE (subdirs YYYYMMDD_YYYYMMDD)
@@ -373,6 +393,23 @@ fn main() -> anyhow::Result<()> {
             deramp_series(&mut series, kind.into(), None)?;
             insar_core::io::write_series(&series, &output)?;
             println!("escrito: {}/ (serie deramp)", output.display());
+        }
+        Command::Aps { series_dir, output, spatial_sigma_px, temporal_window_epochs, wavelength_m } => {
+            use insar_core::atmosphere::{ApsConfig, correct_aps};
+            use insar_core::types::StackMeta;
+
+            let meta = StackMeta {
+                transform: surtgis_core::GeoTransform::default(),
+                crs: None,
+                wavelength_m,
+                incidence_deg: 0.0,
+                heading_deg: None,
+            };
+            let mut series = insar_core::io::read_series(&series_dir, meta)?;
+            let config = ApsConfig { spatial_sigma_px, temporal_window_epochs };
+            correct_aps(&mut series, &config)?;
+            insar_core::io::write_series(&series, &output)?;
+            println!("escrito: {}/ (serie con APS turbulento removido)", output.display());
         }
         Command::Isce {
             input,
