@@ -674,15 +674,10 @@ pub fn select_reference_pixel(
 /// Píxeles con < 2 épocas válidas → NaN (en MVP: cualquier NaN en la serie
 /// deja el píxel en NaN). Error si la serie tiene menos de 2 épocas.
 pub fn estimate_velocity(series: &DisplacementSeries) -> Result<VelocityMap> {
+    series.validate()?;
     let n_epochs = series.n_layers();
     let (n_rows, n_cols) = series.dims();
 
-    if series.epochs.len() != n_epochs {
-        return Err(InsarError::DimensionMismatch(format!(
-            "{} épocas declaradas vs {n_epochs} capas en la serie",
-            series.epochs.len()
-        )));
-    }
     if n_epochs < 2 {
         return Err(InsarError::DimensionMismatch(format!(
             "se requieren al menos 2 épocas para estimar velocidad ({n_epochs} recibidas)"
@@ -690,11 +685,7 @@ pub fn estimate_velocity(series: &DisplacementSeries) -> Result<VelocityMap> {
     }
 
     // Tiempo en años decimales relativo a la primera época.
-    let t: Vec<f64> = series
-        .epochs
-        .iter()
-        .map(|e| e.years_since(&series.epochs[0]))
-        .collect();
+    let t = series.epoch_years();
     let t_mean = t.iter().sum::<f64>() / n_epochs as f64;
     // Pendiente LSQ: v = Σ(t_e − t̄)·d_e / Σ(t_e − t̄)².
     let denom: f64 = t.iter().map(|&ti| (ti - t_mean).powi(2)).sum();
@@ -735,26 +726,17 @@ pub fn estimate_velocity(series: &DisplacementSeries) -> Result<VelocityMap> {
 /// de residuos al cuadrado del ajuste. Requiere ≥3 épocas (n−2 grados de
 /// libertad); con menos → error. Píxeles con la serie no finita → NaN.
 pub fn estimate_velocity_uncertainty(series: &DisplacementSeries) -> Result<Array2<f32>> {
+    series.validate()?;
     let n_epochs = series.n_layers();
     let (n_rows, n_cols) = series.dims();
 
-    if series.epochs.len() != n_epochs {
-        return Err(InsarError::DimensionMismatch(format!(
-            "{} épocas declaradas vs {n_epochs} capas en la serie",
-            series.epochs.len()
-        )));
-    }
     if n_epochs < 3 {
         return Err(InsarError::DimensionMismatch(format!(
             "se requieren al menos 3 épocas para la incertidumbre de velocidad ({n_epochs} recibidas)"
         )));
     }
 
-    let t: Vec<f64> = series
-        .epochs
-        .iter()
-        .map(|e| e.years_since(&series.epochs[0]))
-        .collect();
+    let t = series.epoch_years();
     let t_mean = t.iter().sum::<f64>() / n_epochs as f64;
     let sxx: f64 = t.iter().map(|&ti| (ti - t_mean).powi(2)).sum();
     if sxx <= 0.0 {
@@ -830,15 +812,10 @@ pub fn estimate_velocity_bootstrap(
     n_resamples: usize,
     seed: u64,
 ) -> Result<Array2<f32>> {
+    series.validate()?;
     let n_epochs = series.n_layers();
     let (n_rows, n_cols) = series.dims();
 
-    if series.epochs.len() != n_epochs {
-        return Err(InsarError::DimensionMismatch(format!(
-            "{} épocas declaradas vs {n_epochs} capas en la serie",
-            series.epochs.len()
-        )));
-    }
     if n_epochs < 3 {
         return Err(InsarError::DimensionMismatch(format!(
             "se requieren al menos 3 épocas para el bootstrap ({n_epochs} recibidas)"
@@ -850,11 +827,7 @@ pub fn estimate_velocity_bootstrap(
         )));
     }
 
-    let t: Vec<f64> = series
-        .epochs
-        .iter()
-        .map(|e| e.years_since(&series.epochs[0]))
-        .collect();
+    let t = series.epoch_years();
     if t.windows(2).all(|w| w[0] == w[1]) {
         return Err(InsarError::Inversion(
             "todas las épocas tienen la misma fecha; el ajuste lineal es indeterminado".into(),
@@ -955,6 +928,23 @@ pub struct TemporalFit {
     pub names: Vec<String>,
 }
 
+/// Pseudoinversa de `m` vía SVD con tolerancia rcond estilo LAPACK/numpy
+/// (`s_max · max(filas, cols) · f64::EPSILON`). `None` si `m` es
+/// rank-deficiente (menor valor singular ≤ esa tolerancia) o si la SVD no
+/// converge. Compartido con [`crate::features::extract_features`] — antes
+/// cada uno recalculaba la misma tolerancia por separado.
+pub(crate) fn rcond_pseudo_inverse(m: DMatrix<f64>) -> Option<DMatrix<f64>> {
+    let (n_rows, n_cols) = (m.nrows(), m.ncols());
+    let svd = m.svd(true, true);
+    let s_max = svd.singular_values.iter().copied().fold(0.0_f64, f64::max);
+    let eps = s_max * (n_rows.max(n_cols) as f64) * f64::EPSILON;
+    let s_min = svd.singular_values.iter().copied().fold(f64::MAX, f64::min);
+    if s_min <= eps {
+        return None;
+    }
+    svd.pseudo_inverse(eps).ok()
+}
+
 /// Ajusta el [`TemporalModel`] a la serie de cada píxel por mínimos cuadrados
 /// (pseudoinversa de la matriz temporal G, compartida por todos los píxeles).
 ///
@@ -966,14 +956,9 @@ pub fn fit_temporal_model(
     series: &DisplacementSeries,
     model: &TemporalModel,
 ) -> Result<TemporalFit> {
+    series.validate()?;
     let n_epochs = series.n_layers();
     let (n_rows, n_cols) = series.dims();
-    if series.epochs.len() != n_epochs {
-        return Err(InsarError::DimensionMismatch(format!(
-            "{} épocas declaradas vs {n_epochs} capas en la serie",
-            series.epochs.len()
-        )));
-    }
     if model.polynomial_order == 0 {
         return Err(InsarError::Metadata(
             "polynomial_order debe ser ≥ 1 (1 = offset + velocidad)".into(),
@@ -983,11 +968,7 @@ pub fn fit_temporal_model(
         return Err(InsarError::Metadata(format!("periodo inválido: {p} años")));
     }
 
-    let t: Vec<f64> = series
-        .epochs
-        .iter()
-        .map(|e| e.years_since(&series.epochs[0]))
-        .collect();
+    let t = series.epoch_years();
     let (t_first, t_last) = (series.epochs[0], series.epochs[n_epochs - 1]);
     for s in &model.steps {
         if *s <= t_first || *s > t_last {
@@ -1041,20 +1022,13 @@ pub fn fit_temporal_model(
 
     // Pseudoinversa (compartida por todos los píxeles) + varianza formal del
     // coeficiente de velocidad: [(GᵀG)⁻¹]_vv.
-    let svd = g.clone().svd(true, true);
-    let s_max = svd.singular_values.iter().copied().fold(0.0_f64, f64::max);
-    let eps = s_max * (n_epochs.max(n_coef) as f64) * f64::EPSILON;
-    let s_min = svd.singular_values.iter().copied().fold(f64::MAX, f64::min);
-    if s_min <= eps {
-        return Err(InsarError::Inversion(
+    let pinv = rcond_pseudo_inverse(g.clone()).ok_or_else(|| {
+        InsarError::Inversion(
             "matriz temporal G rank-deficiente: el modelo no es identificable \
              con estas épocas (¿periodo ≫ span temporal o saltos degenerados?)"
                 .into(),
-        ));
-    }
-    let pinv = svd
-        .pseudo_inverse(eps)
-        .map_err(|e| InsarError::Inversion(format!("pseudoinversa de G: {e}")))?;
+        )
+    })?;
     let gtg_inv = (g.transpose() * &g)
         .try_inverse()
         .ok_or_else(|| InsarError::Inversion("GᵀG no invertible".into()))?;

@@ -146,6 +146,29 @@ impl UnwrappedStack {
     }
 }
 
+impl DisplacementSeries {
+    /// Consistencia interna: nº de épocas declaradas vs capas en `data` (eje
+    /// 0). Compartido por todos los ajustes temporales de `inversion` y
+    /// `features` — antes triplicado idéntico en cada uno.
+    pub fn validate(&self) -> Result<()> {
+        let n_layers = self.n_layers();
+        if self.epochs.len() != n_layers {
+            return Err(InsarError::DimensionMismatch(format!(
+                "{} épocas declaradas vs {n_layers} capas en la serie",
+                self.epochs.len()
+            )));
+        }
+        Ok(())
+    }
+
+    /// Tiempo en años decimales de cada época, relativo a la primera. Mismo
+    /// cálculo (`Epoch::years_since` contra `epochs[0]`) que antes se repetía
+    /// en cada función de ajuste temporal.
+    pub fn epoch_years(&self) -> Vec<f64> {
+        self.epochs.iter().map(|e| e.years_since(&self.epochs[0])).collect()
+    }
+}
+
 fn validate_pairs(n_layers: usize, pairs: &[IfgPair], n_epochs: usize) -> Result<()> {
     if pairs.len() != n_layers {
         return Err(InsarError::DimensionMismatch(format!(

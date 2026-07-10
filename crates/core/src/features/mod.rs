@@ -111,15 +111,10 @@ pub fn extract_features(
     quality: Option<&Array2<f32>>,
     config: &FeatureConfig,
 ) -> Result<FeatureMaps> {
+    series.validate()?;
     let n_epochs = series.n_layers();
     let (n_rows, n_cols) = series.dims();
 
-    if series.epochs.len() != n_epochs {
-        return Err(InsarError::DimensionMismatch(format!(
-            "{} épocas declaradas vs {n_epochs} capas en la serie",
-            series.epochs.len()
-        )));
-    }
     if n_epochs < config.min_valid_epochs {
         return Err(InsarError::DimensionMismatch(format!(
             "se requieren al menos {} épocas para extraer features ({n_epochs} recibidas)",
@@ -128,11 +123,7 @@ pub fn extract_features(
     }
 
     // Tiempo en años decimales relativo a la primera época.
-    let t: Vec<f64> = series
-        .epochs
-        .iter()
-        .map(|e| e.years_since(&series.epochs[0]))
-        .collect();
+    let t = series.epoch_years();
 
     // ----- Matriz de diseño (idéntica para todos los píxeles) -----
     // Columnas, en orden: [1, t, (t² si accel), (sin 2πt, cos 2πt si seasonal)].
@@ -391,8 +382,9 @@ struct EpochSolver {
     g_vel: f64,
 }
 
-/// `None` si hay menos filas que coeficientes o la SVD falla. Tolerancia
-/// rcond estilo numpy/LAPACK (igual que en la inversión SBAS).
+/// `None` si hay menos filas que coeficientes o la matriz reducida es
+/// rank-deficiente. Misma tolerancia rcond que
+/// [`crate::inversion::fit_temporal_model`]: [`crate::inversion::rcond_pseudo_inverse`].
 fn epoch_solver(a: &DMatrix<f64>, idx: Vec<usize>, col_t: usize) -> Option<EpochSolver> {
     let n_coef = a.ncols();
     let m = idx.len();
@@ -400,10 +392,7 @@ fn epoch_solver(a: &DMatrix<f64>, idx: Vec<usize>, col_t: usize) -> Option<Epoch
         return None;
     }
     let a_sub = DMatrix::<f64>::from_fn(m, n_coef, |i, j| a[(idx[i], j)]);
-    let svd = a_sub.svd(true, true);
-    let s_max = svd.singular_values.iter().copied().fold(0.0_f64, f64::max);
-    let eps = s_max * (m.max(n_coef) as f64) * f64::EPSILON;
-    let pinv = svd.pseudo_inverse(eps).ok()?;
+    let pinv = crate::inversion::rcond_pseudo_inverse(a_sub)?;
     let g_vel: f64 = (0..m).map(|k| pinv[(col_t, k)].powi(2)).sum();
     Some(EpochSolver { idx, pinv, g_vel })
 }
