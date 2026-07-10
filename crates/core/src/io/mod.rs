@@ -194,6 +194,38 @@ fn meta_from(first: &Raster<f32>, manifest: &StackManifest) -> StackMeta {
     }
 }
 
+/// Acumula `n` capas 2D en un `Array3<T>` (eje 0 = capa, ejes 1-2 = grilla).
+///
+/// `read_layer(i, expected)` lee la capa `i` y debe validar sus propias
+/// dimensiones contra `expected` (con [`check_dims`], usando la ruta que solo
+/// el caller conoce — así el mensaje de error sigue señalando el archivo
+/// exacto que difiere); `expected` es `None` solo en la primera invocación.
+/// Devuelve `(dims_de_esta_capa, valores_en_orden_fila_mayor)`.
+///
+/// Antes cuatro funciones (`read_ifg_stack`, `read_amplitude_stack`,
+/// `read_coherence_stack`, `read_series`) repetían el mismo sentinel de
+/// dimensiones + reserva de capacidad + `Array3::from_shape_vec`; lo que
+/// difiere entre ellas (tipo de dato, nº de archivos por capa, construcción
+/// de `StackMeta`/`epochs`/`pairs`) queda en el closure de cada caller.
+fn accumulate_layers<T>(
+    n: usize,
+    mut read_layer: impl FnMut(usize, Option<(usize, usize)>) -> Result<((usize, usize), Vec<T>)>,
+) -> Result<Array3<T>> {
+    let mut dims: Option<(usize, usize)> = None;
+    let mut values: Vec<T> = Vec::new();
+    for i in 0..n {
+        let (shape, layer) = read_layer(i, dims)?;
+        if dims.is_none() {
+            values.reserve(n * shape.0 * shape.1);
+        }
+        dims.get_or_insert(shape);
+        values.extend(layer);
+    }
+    let (rows, cols) = dims.unwrap_or((0, 0));
+    Array3::from_shape_vec((n, rows, cols), values)
+        .map_err(|e| InsarError::DimensionMismatch(e.to_string()))
+}
+
 // ---------------------------------------------------------------------------
 // API pública
 // ---------------------------------------------------------------------------
@@ -214,43 +246,38 @@ pub fn read_ifg_stack(dir: &Path) -> Result<IfgStack> {
     }
 
     let mut meta: Option<StackMeta> = None;
-    let mut dims: Option<(usize, usize)> = None;
-    let mut values: Vec<Complex32> = Vec::new();
     let mut pairs = Vec::with_capacity(entries.len());
 
-    for entry in entries {
+    let data = accumulate_layers(entries.len(), |i, expected| {
+        let entry = &entries[i];
         let (re_path, im_path) = re_im_paths(dir, &entry.file);
         let re = read_f32(&re_path)?;
         let im = read_f32(&im_path)?;
 
-        let expected = *dims.get_or_insert_with(|| re.shape());
-        check_dims(&re_path, re.shape(), expected)?;
-        check_dims(&im_path, im.shape(), expected)?;
+        let shape = re.shape();
+        check_dims(&re_path, shape, expected.unwrap_or(shape))?;
+        check_dims(&im_path, im.shape(), expected.unwrap_or(shape))?;
 
         if meta.is_none() {
             meta = Some(meta_from(&re, &manifest));
-            values.reserve(entries.len() * expected.0 * expected.1);
         }
-
-        values.extend(
-            re.data()
-                .iter()
-                .zip(im.data().iter())
-                .map(|(&r, &i)| Complex32::new(r, i)),
-        );
         pairs.push(IfgPair {
             reference: entry.reference,
             secondary: entry.secondary,
             perp_baseline_m: entry.perp_baseline_m,
         });
-    }
 
-    // entries no está vacío → dims/meta están definidos.
-    let (rows, cols) = dims.expect("dims definidas: entries no vacío");
+        let values: Vec<Complex32> = re
+            .data()
+            .iter()
+            .zip(im.data().iter())
+            .map(|(&r, &i)| Complex32::new(r, i))
+            .collect();
+        Ok((shape, values))
+    })?;
+
+    // entries no está vacío → meta está definida.
     let meta = meta.expect("meta definida: entries no vacío");
-    let data = Array3::from_shape_vec((entries.len(), rows, cols), values)
-        .map_err(|e| InsarError::DimensionMismatch(e.to_string()))?;
-
     let stack = IfgStack { data, epochs, pairs, meta };
     stack.validate()?;
     Ok(stack)
@@ -276,29 +303,19 @@ pub fn read_amplitude_stack(dir: &Path) -> Result<AmplitudeStack> {
     }
 
     let mut meta: Option<StackMeta> = None;
-    let mut dims: Option<(usize, usize)> = None;
-    let mut values: Vec<f32> = Vec::new();
-
-    for file in files {
-        let path = dir.join(file);
+    let data = accumulate_layers(files.len(), |i, expected| {
+        let path = dir.join(&files[i]);
         let raster = read_f32(&path)?;
-
-        let expected = *dims.get_or_insert_with(|| raster.shape());
-        check_dims(&path, raster.shape(), expected)?;
-
+        let shape = raster.shape();
+        check_dims(&path, shape, expected.unwrap_or(shape))?;
         if meta.is_none() {
             meta = Some(meta_from(&raster, &manifest));
-            values.reserve(files.len() * expected.0 * expected.1);
         }
-        values.extend(raster.data().iter().copied());
-    }
+        Ok((shape, raster.data().iter().copied().collect()))
+    })?;
 
-    // files no vacío (len == epochs.len() > 0) → dims/meta definidos.
-    let (rows, cols) = dims.expect("dims definidas: files no vacío");
+    // files no vacío (len == epochs.len() > 0) → meta definida.
     let meta = meta.expect("meta definida: files no vacío");
-    let data = Array3::from_shape_vec((files.len(), rows, cols), values)
-        .map_err(|e| InsarError::DimensionMismatch(e.to_string()))?;
-
     Ok(AmplitudeStack { data, epochs, meta })
 }
 
@@ -331,22 +348,13 @@ pub fn read_coherence_stack(dir: &Path) -> Result<Option<Array3<f32>>> {
         return Err(InsarError::Metadata("campo 'coherence' vacío".into()));
     }
 
-    let mut dims: Option<(usize, usize)> = None;
-    let mut values: Vec<f32> = Vec::new();
-    for file in files {
-        let path = dir.join(file);
+    let data = accumulate_layers(files.len(), |i, expected| {
+        let path = dir.join(&files[i]);
         let raster = read_f32(&path)?;
-        let expected = *dims.get_or_insert_with(|| raster.shape());
-        check_dims(&path, raster.shape(), expected)?;
-        if values.is_empty() {
-            values.reserve(files.len() * expected.0 * expected.1);
-        }
-        values.extend(raster.data().iter().copied());
-    }
-
-    let (rows, cols) = dims.expect("files no vacío: len == ifgs.len() > 0 validado arriba");
-    let data = Array3::from_shape_vec((files.len(), rows, cols), values)
-        .map_err(|e| InsarError::DimensionMismatch(e.to_string()))?;
+        let shape = raster.shape();
+        check_dims(&path, shape, expected.unwrap_or(shape))?;
+        Ok((shape, raster.data().iter().copied().collect()))
+    })?;
     Ok(Some(data))
 }
 
@@ -439,23 +447,19 @@ pub fn read_series(dir: &Path, meta: StackMeta) -> Result<DisplacementSeries> {
     }
     entries.sort_by_key(|(epoch, _)| *epoch);
 
-    let mut dims: Option<(usize, usize)> = None;
     let mut geo: Option<(surtgis_core::GeoTransform, Option<surtgis_core::CRS>)> = None;
-    let mut values: Vec<f32> = Vec::with_capacity(entries.len());
     let mut epochs = Vec::with_capacity(entries.len());
-    for (epoch, path) in &entries {
+    let data = accumulate_layers(entries.len(), |i, expected| {
+        let (epoch, path) = &entries[i];
         let raster = read_f32(path)?;
-        let expected = *dims.get_or_insert_with(|| raster.shape());
-        check_dims(path, raster.shape(), expected)?;
+        let shape = raster.shape();
+        check_dims(path, shape, expected.unwrap_or(shape))?;
         geo.get_or_insert_with(|| (*raster.transform(), raster.crs().cloned()));
-        values.extend(raster.data().iter().copied());
         epochs.push(*epoch);
-    }
+        Ok((shape, raster.data().iter().copied().collect()))
+    })?;
 
-    let (rows, cols) = dims.expect("dims definidas: entries no vacío");
     let (transform, crs) = geo.expect("geo definida: entries no vacío");
-    let data = Array3::from_shape_vec((entries.len(), rows, cols), values)
-        .map_err(|e| InsarError::DimensionMismatch(e.to_string()))?;
     let meta = StackMeta { transform, crs, ..meta };
     Ok(DisplacementSeries { data, epochs, meta })
 }
