@@ -45,7 +45,7 @@ use nalgebra::{DMatrix, DVector};
 use ndarray::{Array2, Axis};
 use rayon::prelude::*;
 
-use crate::error::{InsarError, Result};
+use crate::error::{InsarError, IoResultExt, Result};
 use crate::types::{DisplacementSeries, StackMeta};
 
 /// Qué componentes ajustar / qué features calcular.
@@ -513,7 +513,7 @@ impl FeatureMaps {
     /// Escribe cada mapa de feature como un GeoTIFF Float32 en `dir`
     /// (`velocity.tif`, `acceleration.tif`, …), vía el writer de [`crate::io`].
     pub fn write_geotiffs(&self, dir: &Path) -> Result<()> {
-        std::fs::create_dir_all(dir)?;
+        std::fs::create_dir_all(dir).with_path(dir)?;
         let names = self.feature_names();
         let maps = self.active_maps();
         for (name, map) in names.iter().zip(maps.iter()) {
@@ -535,16 +535,16 @@ impl FeatureMaps {
 
         let (table, coords, names) = self.to_table(mask);
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
+            std::fs::create_dir_all(parent).with_path(parent)?;
         }
-        let mut f = std::fs::File::create(path)?;
-        writeln!(f, "x,y,{}", names.join(","))?;
+        let mut f = std::fs::File::create(path).with_path(path)?;
+        writeln!(f, "x,y,{}", names.join(",")).with_path(path)?;
         for (row, (x, y)) in table.rows().into_iter().zip(coords.iter()) {
-            write!(f, "{x},{y}")?;
+            write!(f, "{x},{y}").with_path(path)?;
             for v in row {
-                write!(f, ",{v}")?;
+                write!(f, ",{v}").with_path(path)?;
             }
-            writeln!(f)?;
+            writeln!(f).with_path(path)?;
         }
         Ok(())
     }

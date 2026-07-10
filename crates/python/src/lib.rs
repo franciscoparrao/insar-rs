@@ -39,7 +39,7 @@ use insar_core::unwrap_error::correct_unwrap_errors as core_correct_unwrap_error
 /// `RuntimeError`, y datos/parámetros inválidos → `ValueError`.
 fn err(e: InsarError) -> PyErr {
     match &e {
-        InsarError::Io(_) | InsarError::Raster(_) => PyIOError::new_err(e.to_string()),
+        InsarError::Io { .. } | InsarError::Raster(_) => PyIOError::new_err(e.to_string()),
         InsarError::Inversion(_) => PyRuntimeError::new_err(e.to_string()),
         InsarError::DimensionMismatch(_)
         | InsarError::InvalidNetwork(_)

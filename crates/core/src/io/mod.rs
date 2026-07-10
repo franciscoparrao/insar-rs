@@ -62,7 +62,7 @@ use serde::Deserialize;
 use surtgis_core::Raster;
 use surtgis_core::io::{read_geotiff, write_geotiff};
 
-use crate::error::{InsarError, Result};
+use crate::error::{InsarError, IoResultExt, Result};
 use crate::types::{
     AmplitudeStack, DisplacementSeries, Epoch, IfgPair, IfgStack, StackMeta, VelocityMap,
 };
@@ -108,7 +108,7 @@ struct StackManifest {
 /// Lee y valida el manifiesto; devuelve manifiesto + épocas parseadas.
 fn load_manifest(dir: &Path) -> Result<(StackManifest, Vec<Epoch>)> {
     let path = dir.join(MANIFEST_NAME);
-    let text = fs::read_to_string(&path)?;
+    let text = fs::read_to_string(&path).with_path(&path)?;
     let manifest: StackManifest = serde_json::from_str(&text).map_err(|e| {
         InsarError::Metadata(format!("{} malformado: {e}", path.display()))
     })?;
@@ -384,7 +384,7 @@ pub fn write_series(series: &DisplacementSeries, dir: &Path) -> Result<()> {
             series.epochs.len()
         )));
     }
-    fs::create_dir_all(dir)?;
+    fs::create_dir_all(dir).with_path(dir)?;
     for (i, epoch) in series.epochs.iter().enumerate() {
         let layer = series.data.index_axis(Axis(0), i);
         let raster = raster_from_layer(layer, &series.meta)?;
@@ -420,7 +420,8 @@ pub fn read_velocity(path: &Path, meta: StackMeta) -> Result<VelocityMap> {
 /// `meta` (no georreferenciados, no se guardan en el GeoTIFF); `transform`/
 /// `crs` del primer archivo (por fecha).
 pub fn read_series(dir: &Path, meta: StackMeta) -> Result<DisplacementSeries> {
-    let mut entries: Vec<(Epoch, PathBuf)> = fs::read_dir(dir)?
+    let mut entries: Vec<(Epoch, PathBuf)> = fs::read_dir(dir)
+        .with_path(dir)?
         .filter_map(|e| e.ok())
         .filter_map(|e| {
             let path = e.path();

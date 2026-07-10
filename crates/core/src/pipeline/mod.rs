@@ -58,7 +58,7 @@ use std::path::PathBuf;
 use ndarray::Array2;
 
 use crate::atmosphere::{self, ApsConfig};
-use crate::error::{InsarError, Result};
+use crate::error::{InsarError, IoResultExt, Result};
 use crate::inversion::SbasSolverConfig;
 use crate::network::SbasConfig;
 use crate::postprocess::RampKind;
@@ -275,7 +275,7 @@ pub fn run_sbas(config: &SbasPipelineConfig) -> Result<SbasProducts> {
     let gamma = postprocess::temporal_coherence(&unwrapped, &series)?;
 
     // 10) Productos a disco.
-    fs::create_dir_all(&config.output_dir)?;
+    fs::create_dir_all(&config.output_dir).with_path(&config.output_dir)?;
     io::write_velocity(&velocity, &config.output_dir.join("velocity.tif"))?;
     io::write_series(&series, &config.output_dir.join("series"))?;
     let as_map = |data: Array2<f32>| VelocityMap { data, meta: series.meta.clone() };

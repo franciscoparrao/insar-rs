@@ -54,7 +54,7 @@ use ndarray::{Array2, Array3, Zip};
 use num_complex::Complex32;
 use surtgis_core::GeoTransform;
 
-use crate::error::{InsarError, Result};
+use crate::error::{InsarError, IoResultExt, Result};
 use crate::types::{Epoch, IfgPair, IfgStack, StackMeta, UnwrappedStack};
 
 /// Configuración de carga de un stack ISCE.
@@ -118,7 +118,7 @@ pub(crate) struct VrtLayout {
 /// Parsea un `.vrt` de GDAL (VRTRawRasterBand) a [`VrtLayout`].
 /// `source` de cada banda se resuelve relativo al directorio del `.vrt`.
 pub(crate) fn parse_vrt(path: &Path) -> Result<VrtLayout> {
-    let text = fs::read_to_string(path)?;
+    let text = fs::read_to_string(path).with_path(path)?;
     let doc = roxmltree::Document::parse(&text).map_err(|e| {
         InsarError::UnsupportedFormat(format!("{}: XML inválido: {e}", path.display()))
     })?;
@@ -246,8 +246,8 @@ fn parse_child_u64(node: &roxmltree::Node, tag: &str, path: &Path) -> Result<u64
 /// escritos por un proceso externo (topsStack/HyP3) antes de que insar-rs
 /// los lea, no archivos mutados concurrentemente durante la lectura.
 fn mmap_file(path: &Path) -> Result<memmap2::Mmap> {
-    let file = fs::File::open(path)?;
-    Ok(unsafe { memmap2::Mmap::map(&file)? })
+    let file = fs::File::open(path).with_path(path)?;
+    unsafe { memmap2::Mmap::map(&file) }.with_path(path)
 }
 
 /// Lee una banda (1-based) de un raster crudo como `Array2<f32>`
@@ -368,13 +368,13 @@ fn decode_raw_with<T: Copy + Default>(
     match last_byte {
         Some(needed) if needed <= raw.len() => {}
         _ => {
-            return Err(InsarError::Io(std::io::Error::new(
-                std::io::ErrorKind::UnexpectedEof,
-                format!(
-                    "{}: archivo más corto de lo que exigen los offsets de la banda {band_1based}",
-                    band.source.display()
+            return Err(InsarError::io(
+                &band.source,
+                std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    format!("archivo más corto de lo que exigen los offsets de la banda {band_1based}"),
                 ),
-            )));
+            ));
         }
     }
 
@@ -397,10 +397,10 @@ fn decode_raw_with<T: Copy + Default>(
 fn list_pair_dirs(dir: &Path) -> Result<Vec<(NaiveDate, NaiveDate, String, PathBuf)>> {
     let mut pairs: Vec<(NaiveDate, NaiveDate, String, PathBuf)> = Vec::new();
 
-    let entries = fs::read_dir(dir)?;
+    let entries = fs::read_dir(dir).with_path(dir)?;
     for entry in entries {
-        let entry = entry?;
-        if !entry.file_type()?.is_dir() {
+        let entry = entry.with_path(dir)?;
+        if !entry.file_type().with_path(entry.path())?.is_dir() {
             continue;
         }
         let name = match entry.file_name().into_string() {
@@ -884,7 +884,8 @@ mod tests {
 
         let layout = parse_vrt(&dir.join("raw.vrt")).unwrap();
         let err = read_raw_band(&layout, 2).unwrap_err();
-        assert!(matches!(err, InsarError::Io(_)), "got: {err:?}");
+        assert!(matches!(err, InsarError::Io { .. }), "got: {err:?}");
+        assert!(err.to_string().contains(src), "el error debe incluir el path que falló: {err}");
         let _ = fs::remove_dir_all(&dir);
     }
 

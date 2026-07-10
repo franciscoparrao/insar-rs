@@ -22,7 +22,7 @@ use ndarray::{Array2, Array3, Axis};
 use rayon::prelude::*;
 
 use super::wrapped_phase_layer;
-use crate::error::{InsarError, Result};
+use crate::error::{InsarError, IoResultExt, Result};
 use crate::types::{IfgStack, UnwrappedStack};
 
 /// Configuración del backend SNAPHU.
@@ -56,14 +56,14 @@ fn write_float_raw(path: &Path, data: &Array2<f32>) -> Result<()> {
     for &v in data.iter() {
         bytes.extend_from_slice(&v.to_ne_bytes());
     }
-    std::fs::write(path, bytes)?;
+    std::fs::write(path, bytes).with_path(path)?;
     Ok(())
 }
 
 /// Lee raw float32 nativo (formato SNAPHU `FLOAT_DATA`) con dimensiones
 /// conocidas de antemano (snaphu no escribe cabecera).
 fn read_float_raw(path: &Path, rows: usize, cols: usize) -> Result<Array2<f32>> {
-    let bytes = std::fs::read(path)?;
+    let bytes = std::fs::read(path).with_path(path)?;
     let expected = rows * cols * 4;
     if bytes.len() != expected {
         return Err(InsarError::DimensionMismatch(format!(
@@ -109,7 +109,7 @@ pub fn unwrap_2d_snaphu(
     }
 
     let dir = unique_tmp_dir("2d");
-    std::fs::create_dir_all(&dir)?;
+    std::fs::create_dir_all(&dir).with_path(&dir)?;
     let result = run_snaphu(&dir, wrapped, quality, rows, cols, config);
     let _ = std::fs::remove_dir_all(&dir);
     result
@@ -152,7 +152,7 @@ fn run_snaphu(
     if has_corr {
         conf.push_str(&format!("CORRFILE {}\nCORRFILEFORMAT FLOAT_DATA\n", corr_path.display()));
     }
-    std::fs::write(&conf_path, conf)?;
+    std::fs::write(&conf_path, conf).with_path(&conf_path)?;
 
     let output = Command::new(&config.binary)
         .arg("-f")
@@ -160,7 +160,8 @@ fn run_snaphu(
         .arg(&infile)
         .arg(cols.to_string())
         .current_dir(dir)
-        .output()?;
+        .output()
+        .with_path(&config.binary)?;
     if !output.status.success() {
         return Err(InsarError::Inversion(format!(
             "snaphu exited con {}: {}",
@@ -203,7 +204,7 @@ pub fn unwrap_stack_snaphu(
             let wrapped = wrapped_phase_layer(stack, k);
             let qual = coherence.map(|coh| coh.index_axis(Axis(0), k).to_owned());
             let dir = unique_tmp_dir(&format!("stack{k}"));
-            std::fs::create_dir_all(&dir)?;
+            std::fs::create_dir_all(&dir).with_path(&dir)?;
             let result = run_snaphu(&dir, &wrapped, qual.as_ref(), rows, cols, config);
             let _ = std::fs::remove_dir_all(&dir);
             result
@@ -292,7 +293,7 @@ mod tests {
         let wrapped = wrap(&ramp(4, 4, 0.3, 0.2));
         let config = SnaphuConfig { binary: "insar-rs-snaphu-no-existe-nunca".into() };
         let err = unwrap_2d_snaphu(&wrapped, None, &config).unwrap_err();
-        assert!(matches!(err, InsarError::Io(_)), "got: {err:?}");
+        assert!(matches!(err, InsarError::Io { .. }), "got: {err:?}");
     }
 
     #[test]
