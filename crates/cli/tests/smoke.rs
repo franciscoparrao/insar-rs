@@ -153,5 +153,134 @@ fn decompose_features_deramp_sobre_datos_sinteticos() {
     assert!(out.status.success(), "deramp falló: {}", String::from_utf8_lossy(&out.stderr));
     assert!(deramp_out.join("disp_20230101.tif").exists());
 
+    // `tropo-era5`: cubo de retardo sintético con las MISMAS fechas que
+    // `series_dir`, creciente en el tiempo (simula humedad creciente).
+    let delay_epochs: Vec<Epoch> = [
+        "2023-01-01",
+        "2023-01-13",
+        "2023-01-25",
+        "2023-02-06",
+        "2023-02-18",
+    ]
+    .iter()
+    .map(|s| Epoch(s.parse().unwrap()))
+    .collect();
+    let delay_dir = base.join("era5_delay");
+    let delay_data =
+        Array3::from_shape_fn((delay_epochs.len(), ROWS, COLS), |(k, _, _)| 0.001 * k as f32);
+    let delay_series =
+        DisplacementSeries { data: delay_data, epochs: delay_epochs, meta: test_meta() };
+    insar_core::io::write_series(&delay_series, &delay_dir).expect("escribir cubo ERA5 de prueba");
+
+    let era5_out = base.join("era5_out");
+    let out = run(&[
+        "tropo-era5",
+        series_dir.to_str().unwrap(),
+        delay_dir.to_str().unwrap(),
+        era5_out.to_str().unwrap(),
+    ]);
+    assert!(out.status.success(), "tropo-era5 falló: {}", String::from_utf8_lossy(&out.stderr));
+    let corrected = insar_core::io::read_series(&era5_out, test_meta()).expect("leer serie corregida");
+    // Época 0 (referencia): sin cambio. Época k: += delay[k] - delay[0].
+    for k in 0..n {
+        let expected_delta = 0.001 * k as f32;
+        for r in 0..ROWS {
+            for c in 0..COLS {
+                let before = -0.01 * k as f32 + (r * COLS + c) as f32 * 1e-4;
+                let got = corrected.data[[k, r, c]];
+                assert!(
+                    (got - (before + expected_delta)).abs() < 1e-6,
+                    "época {k} ({r},{c}): {got} vs {}",
+                    before + expected_delta
+                );
+            }
+        }
+    }
+
+    // Cubo con fechas distintas → error explícito, no panic.
+    let bad_delay_dir = base.join("era5_delay_bad");
+    let bad_epochs: Vec<Epoch> = ["2023-01-01", "2023-01-13"].iter().map(|s| Epoch(s.parse().unwrap())).collect();
+    let bad_delay = DisplacementSeries {
+        data: Array3::from_elem((2, ROWS, COLS), 0.0_f32),
+        epochs: bad_epochs,
+        meta: test_meta(),
+    };
+    insar_core::io::write_series(&bad_delay, &bad_delay_dir).expect("escribir cubo ERA5 inválido");
+    let out = run(&[
+        "tropo-era5",
+        series_dir.to_str().unwrap(),
+        bad_delay_dir.to_str().unwrap(),
+        base.join("era5_out_bad").to_str().unwrap(),
+    ]);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("panicked"), "no debe haber panic: {stderr}");
+
     let _ = fs::remove_dir_all(&base);
+}
+
+/// Regresión: `--ref-region` repetido causaba panic (`unreachable!`) porque
+/// `Option<Vec<usize>>` infiere `ArgAction::Append` por defecto en clap, y dos
+/// ocurrencias acumulaban 8 valores en vez de reemplazar. También cubre la
+/// validación de rango inválido y el conflicto con `--ref-row`/`--ref-col`,
+/// ninguno cubierto antes de este fix. El directorio de entrada no necesita
+/// existir: toda esta validación corre antes de leer el stack.
+#[test]
+fn ref_region_no_hace_panic_con_flags_invalidos() {
+    // Doble ocurrencia: clap debe rechazarla con error, no acumular 8 valores.
+    let out = run(&[
+        "isce",
+        "/no/existe",
+        "/tmp/no_importa",
+        "--ref-region",
+        "0",
+        "0",
+        "1",
+        "1",
+        "--ref-region",
+        "2",
+        "2",
+        "3",
+        "3",
+    ]);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("panicked"), "no debe haber panic: {stderr}");
+    assert!(!stderr.contains("unreachable"), "no debe haber unreachable: {stderr}");
+
+    // Rango inválido (mín > máx): error limpio, no panic.
+    let out = run(&[
+        "isce",
+        "/no/existe",
+        "/tmp/no_importa",
+        "--ref-region",
+        "5",
+        "5",
+        "1",
+        "1",
+    ]);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("panicked"), "no debe haber panic: {stderr}");
+    assert!(stderr.contains("inválido"), "stderr: {stderr}");
+
+    // --ref-row/--ref-col junto a --ref-region: conflicto explícito.
+    let out = run(&[
+        "isce",
+        "/no/existe",
+        "/tmp/no_importa",
+        "--ref-row",
+        "1",
+        "--ref-col",
+        "1",
+        "--ref-region",
+        "0",
+        "0",
+        "1",
+        "1",
+    ]);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("panicked"), "no debe haber panic: {stderr}");
+    assert!(stderr.contains("excluyentes"), "stderr: {stderr}");
 }

@@ -35,10 +35,15 @@ enum UnwrapBackendArg {
 }
 
 /// Convierte los 4 valores de `--ref-region` en `(fila_min, col_min, fila_max,
-/// col_max)`, validando fila_min<=fila_max y col_min<=col_max. `clap` ya
-/// garantiza exactamente 4 elementos (`num_args = 4`).
+/// col_max)`, validando fila_min<=fila_max y col_min<=col_max. `clap` garantiza
+/// exactamente 4 elementos por ocurrencia (`num_args = 4`); `action = Set`
+/// asegura que una segunda ocurrencia del flag reemplace a la primera en vez
+/// de acumular 8 valores (con `Append`, el default para `Vec<T>`, entrarían
+/// 8 elementos y este slice pattern haría panic).
 fn parse_ref_region(v: Vec<usize>) -> anyhow::Result<(usize, usize, usize, usize)> {
-    let [r0, c0, r1, c1] = v[..] else { unreachable!("num_args=4") };
+    let [r0, c0, r1, c1] = v[..] else {
+        anyhow::bail!("--ref-region requiere exactamente 4 valores, recibidos {}", v.len());
+    };
     if r0 > r1 || c0 > c1 {
         anyhow::bail!("--ref-region inválido: mín ({r0},{c0}) > máx ({r1},{c1})");
     }
@@ -103,7 +108,7 @@ enum Command {
         /// grande que la de interés (p. ej. bbox de stackSentinel.py, que
         /// solo filtra bursts y no recorta el producto final). Ignorado si
         /// se da --ref-row/--ref-col
-        #[arg(long, num_args = 4, value_names = ["FILA_MIN", "COL_MIN", "FILA_MAX", "COL_MAX"])]
+        #[arg(long, num_args = 4, action = clap::ArgAction::Set, value_names = ["FILA_MIN", "COL_MIN", "FILA_MAX", "COL_MAX"])]
         ref_region: Option<Vec<usize>>,
     },
     /// Descompone LOS ascendente + descendente en (Up, East) — geometría escalar
@@ -181,6 +186,29 @@ enum Command {
         #[arg(long, default_value_t = insar_core::types::SENTINEL1_WAVELENGTH_M)]
         wavelength_m: f64,
     },
+    /// Corrección troposférica estratificada por reanálisis (G-7/ERA5),
+    /// standalone sobre una serie ya escrita (fuera de 'run'/'isce'). El cubo
+    /// de retardo LOS (un GeoTIFF por época, mismas fechas que la serie) se
+    /// genera externamente — ver `validation/era5_correction.py`, requiere
+    /// credenciales propias de Copernicus CDS (`~/.cdsapirc`); este comando
+    /// solo aplica la corrección ya resuelta en la grilla InSAR.
+    TropoEra5 {
+        /// Directorio con la serie a corregir (disp_YYYYMMDD.tif)
+        series_dir: PathBuf,
+        /// Directorio con el cubo de retardo LOS por época — mismo formato
+        /// (disp_YYYYMMDD.tif) y EXACTAMENTE las mismas fechas que
+        /// `series_dir` (ver `validation/era5_correction.py`)
+        delay_dir: PathBuf,
+        /// Directorio de salida
+        output: PathBuf,
+        /// Longitud de onda radar en metros
+        #[arg(long, default_value_t = insar_core::types::SENTINEL1_WAVELENGTH_M)]
+        wavelength_m: f64,
+        /// Índice de la época de referencia (0 = primera) a la que ya está
+        /// referenciada la serie de desplazamiento
+        #[arg(long, default_value_t = 0)]
+        reference_epoch: usize,
+    },
     /// SBAS directo desde interferogramas ISCE (.unw ya desenrollados)
     Isce {
         /// Directorio de interferogramas ISCE (subdirs YYYYMMDD_YYYYMMDD)
@@ -216,7 +244,7 @@ enum Command {
         /// píxeles (FILA_MIN COL_MIN FILA_MAX COL_MAX), inclusivo. Evita que
         /// caiga fuera del AOI real cuando el stack cubre un área mucho más
         /// grande que la de interés. Ignorado si se da --ref-row/--ref-col
-        #[arg(long, num_args = 4, value_names = ["FILA_MIN", "COL_MIN", "FILA_MAX", "COL_MAX"])]
+        #[arg(long, num_args = 4, action = clap::ArgAction::Set, value_names = ["FILA_MIN", "COL_MIN", "FILA_MAX", "COL_MAX"])]
         ref_region: Option<Vec<usize>>,
     },
 }
@@ -296,6 +324,13 @@ fn main() -> anyhow::Result<()> {
                 println!(
                     "cierre de fase: {} píxeles corregidos, {} detectados sin corregir",
                     rep.corrected, rep.detected_uncorrected
+                );
+            }
+            if products.pairs_lost_by_reference > 0 {
+                eprintln!(
+                    "advertencia: {} pares quedaron sin fase finita en el píxel de referencia \
+                     y se perdieron por completo (rellenados con NaN)",
+                    products.pairs_lost_by_reference
                 );
             }
             println!("escrito: {}/velocity.tif + temporal_coherence.tif + series/", output.display());
@@ -411,6 +446,35 @@ fn main() -> anyhow::Result<()> {
             insar_core::io::write_series(&series, &output)?;
             println!("escrito: {}/ (serie con APS turbulento removido)", output.display());
         }
+        Command::TropoEra5 { series_dir, delay_dir, output, wavelength_m, reference_epoch } => {
+            use insar_core::troposphere::era5::correct_era5_series;
+            use insar_core::types::StackMeta;
+
+            let meta = StackMeta {
+                transform: surtgis_core::GeoTransform::default(),
+                crs: None,
+                wavelength_m,
+                incidence_deg: 0.0,
+                heading_deg: None,
+            };
+            let mut series = insar_core::io::read_series(&series_dir, meta.clone())?;
+            let delay = insar_core::io::read_series(&delay_dir, meta)?;
+            if delay.epochs != series.epochs {
+                anyhow::bail!(
+                    "el cubo de retardo ({} épocas: {:?}..{:?}) no cubre las mismas fechas que la \
+                     serie ({} épocas: {:?}..{:?}) — deben ser exactamente las mismas",
+                    delay.epochs.len(),
+                    delay.epochs.first(),
+                    delay.epochs.last(),
+                    series.epochs.len(),
+                    series.epochs.first(),
+                    series.epochs.last(),
+                );
+            }
+            correct_era5_series(&mut series, &delay.data, reference_epoch)?;
+            insar_core::io::write_series(&series, &output)?;
+            println!("escrito: {}/ (serie corregida por ERA5)", output.display());
+        }
         Command::Isce {
             input,
             output,
@@ -424,105 +488,85 @@ fn main() -> anyhow::Result<()> {
             ref_col,
             ref_region,
         } => {
-            use insar_core::inversion::{
-                DemErrorConfig, IrlsConfig, SbasSolverConfig, WeightScheme, invert_sbas_ext,
-                select_reference_pixel,
-            };
-            use insar_core::io::isce::{
-                IsceLoadConfig, read_isce_coherence, read_isce_unwrapped_stack,
-            };
+            use insar_core::inversion::{DemErrorConfig, IrlsConfig, SbasSolverConfig, WeightScheme};
+            use insar_core::io::isce::IsceLoadConfig;
+            use insar_core::pipeline::{IsceSbasConfig, run_sbas_isce};
 
             if ref_row.is_some() && ref_region.is_some() {
                 anyhow::bail!("--ref-row/--ref-col y --ref-region son mutuamente excluyentes");
             }
             let reference_region = ref_region.map(parse_ref_region).transpose()?;
 
-            let config = IsceLoadConfig { baselines_dir: baselines, ..Default::default() };
-            let mut stack = read_isce_unwrapped_stack(&input, &config)?;
-            let (rows, cols) = stack.dims();
+            if wls {
+                // `run_sbas_isce` también rechaza esto (mensaje genérico
+                // "weighting != Unit"); este chequeo previo da un mensaje
+                // específico de --wls sin leer el directorio dos veces si no
+                // hace falta (el check solo dispara cuando --wls está activo).
+                let probe = IsceLoadConfig { baselines_dir: baselines.clone(), ..Default::default() };
+                if let Err(e) = insar_core::io::isce::read_isce_coherence(&input, &probe) {
+                    anyhow::bail!("--wls requiere los .cor de coherencia: {e}");
+                }
+            }
+
+            let config = IsceSbasConfig {
+                load: IsceLoadConfig { baselines_dir: baselines, ..Default::default() },
+                correct_unwrap: !no_closure_correction,
+                reference: ref_row.zip(ref_col),
+                reference_region,
+                solver: SbasSolverConfig {
+                    weighting: if wls { WeightScheme::InversePhaseVariance } else { WeightScheme::Unit },
+                    dem_error: dem_error_range.map(|slant_range_m| DemErrorConfig { slant_range_m }),
+                    robust: robust.then(IrlsConfig::default),
+                },
+                deramp: deramp.map(RampKind::from),
+                ..IsceSbasConfig::new(input.clone())
+            };
+            let products = run_sbas_isce(&config)?;
+
+            let (rows, cols) = products.series.dims();
             println!(
                 "ISCE: {} épocas, {} pares, {rows} × {cols}",
-                stack.epochs.len(),
-                stack.pairs.len()
+                products.series.epochs.len(),
+                products.n_pairs
             );
-
-            // Coherencia: calidad para referencia automática y pesos WLS.
-            let coherence = match read_isce_coherence(&input, &config) {
-                Ok(coh) => Some(coh),
-                Err(e) => {
-                    if wls {
-                        anyhow::bail!("--wls requiere los .cor de coherencia: {e}");
-                    }
-                    println!("sin coherencia disponible ({e})");
-                    None
-                }
-            };
-
-            // Corrección de errores de desenrollado por cierre de fase.
-            let closure_qc = if no_closure_correction {
-                None
-            } else {
-                let rep = insar_core::unwrap_error::correct_unwrap_errors(&mut stack)?;
+            if !products.has_coherence {
+                println!("sin coherencia disponible en {}", input.display());
+            }
+            if let Some(rep) = &products.unwrap_report {
                 println!(
                     "cierre de fase: {} píxeles corregidos, {} detectados sin corregir",
                     rep.corrected, rep.detected_uncorrected
                 );
-                Some(insar_core::unwrap_error::nonzero_closure_count(&stack)?)
-            };
-
-            // Píxel de referencia: manual > auto (máxima coherencia media,
-            // opcionalmente restringida a --ref-region) > el centro.
-            let (ref_r, ref_c) = if let (Some(r), Some(c)) = (ref_row, ref_col) {
-                (r, c)
-            } else {
-                let region_mask = reference_region.map(|(r0, c0, r1, c1)| {
-                    let mut mask = ndarray::Array2::from_elem((rows, cols), false);
-                    for r in r0..=r1.min(rows.saturating_sub(1)) {
-                        for c in c0..=c1.min(cols.saturating_sub(1)) {
-                            mask[[r, c]] = true;
-                        }
-                    }
-                    mask
-                });
-                coherence
-                    .as_ref()
-                    .and_then(|coh| select_reference_pixel(coh, region_mask.as_ref()))
-                    .unwrap_or((rows / 2, cols / 2))
-            };
-            println!("referencia: ({ref_r}, {ref_c})");
-            insar_core::inversion::reference_to_pixel(&mut stack, ref_r, ref_c)?;
-
-            // Inversión: OLS o WLS, con error de DEM opcional.
-            let solver = SbasSolverConfig {
-                weighting: if wls { WeightScheme::InversePhaseVariance } else { WeightScheme::Unit },
-                dem_error: dem_error_range.map(|slant_range_m| DemErrorConfig { slant_range_m }),
-                robust: robust.then(IrlsConfig::default),
-            };
-            let solution = invert_sbas_ext(&stack, None, coherence.as_ref(), &solver)?;
-            let mut series = solution.series;
-
-            // Deramp opcional de la serie.
-            if let Some(kind) = deramp {
-                insar_core::postprocess::deramp_series(&mut series, kind.into(), None)?;
+            }
+            println!("referencia: {:?}", products.reference);
+            if products.pairs_lost_by_reference > 0 {
+                eprintln!(
+                    "advertencia: {} pares quedaron sin fase finita en el píxel de referencia \
+                     y se perdieron por completo (rellenados con NaN)",
+                    products.pairs_lost_by_reference
+                );
             }
 
-            let velocity = insar_core::inversion::estimate_velocity(&series)?;
-            let vel_std = insar_core::inversion::estimate_velocity_uncertainty(&series)?;
-            let gamma = insar_core::postprocess::temporal_coherence(&stack, &series)?;
-
             std::fs::create_dir_all(&output)?;
-            insar_core::io::write_velocity(&velocity, &output.join("velocity.tif"))?;
-            insar_core::io::write_series(&series, &output.join("series"))?;
+            insar_core::io::write_velocity(&products.velocity, &output.join("velocity.tif"))?;
+            insar_core::io::write_series(&products.series, &output.join("series"))?;
             // Los mapas de calidad comparten el writer Float32 (mismo meta).
-            let wrap = |d| insar_core::types::VelocityMap { data: d, meta: stack.meta.clone() };
-            insar_core::io::write_velocity(&wrap(gamma), &output.join("temporal_coherence.tif"))?;
-            insar_core::io::write_velocity(&wrap(vel_std), &output.join("velocity_std.tif"))?;
+            let meta = products.series.meta.clone();
+            let wrap = |d| insar_core::types::VelocityMap { data: d, meta: meta.clone() };
+            insar_core::io::write_velocity(
+                &wrap(products.temporal_coherence),
+                &output.join("temporal_coherence.tif"),
+            )?;
+            insar_core::io::write_velocity(
+                &wrap(products.velocity_std),
+                &output.join("velocity_std.tif"),
+            )?;
             let mut extras = String::new();
-            if let Some(dem) = solution.dem_error_m {
+            if let Some(dem) = products.dem_error_m {
                 insar_core::io::write_velocity(&wrap(dem), &output.join("dem_error.tif"))?;
                 extras.push_str(" + dem_error.tif");
             }
-            if let Some(qc) = closure_qc {
+            if let Some(qc) = products.closure_qc {
                 insar_core::io::write_velocity(&wrap(qc), &output.join("closure_qc.tif"))?;
                 extras.push_str(" + closure_qc.tif");
             }
