@@ -8,6 +8,7 @@ repository.workspace = true
 description.workspace = true
 keywords.workspace = true
 categories.workspace = true
+readme = "README.md"
 # Los examples usan crates hermanos (geostat/smelt/swarm) que cargo strippea
 # al publicar (dev-deps sin version): se excluyen del paquete publicado.
 exclude = ["examples/"]
