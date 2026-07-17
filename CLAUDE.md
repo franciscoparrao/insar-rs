@@ -1,6 +1,6 @@
 # insar-rs — Motor de InSAR time-series (deformación del terreno) en Rust
 
-> **Estado:** IDEA (sin código). Creado 2026-06-10 desde revisión de estado del arte.
+> **Estado:** MADURO v0.1.0 (actualizado 2026-07-11 tras auditoría). ~13.800 LOC, 206 tests. insar-core con 14 módulos: I/O stack propio + lector ISCE nativo, PS, red SBAS, unwrap quality-guided (+SNAPHU opcional), corrección de fase, inversión OLS/WLS/L1-IRLS + error DEM + bootstrap, APS/troposfera, deramp, descomposición LOS→up/east, features ML, pipeline `run_sbas`. Sin stubs. Bindings PyO3. Validado: paridad con MintPy sobre Fernandina (serie RMSE 0.0029 mm, velocidad 0.0070 mm/año, r=1.000000). Requiere sibling `../surtgis`. Sin paper aún (venue: ESIN/C&G) — sería el próximo hito. *(Antes decía "IDEA sin código" — era incorrecto.)*
 > Familia de motores Rust del autor: SurtGIS, Hydroflux, Smelt, Anvil, Cantus, Criterium.
 > Doc madre: `~/proyectos/ideas-motores-rust.md` (idea N2, Parte 5).
 
