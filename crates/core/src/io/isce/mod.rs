@@ -137,7 +137,15 @@ pub(crate) fn parse_vrt(path: &Path) -> Result<VrtLayout> {
     // Directorio del .vrt para resolver SourceFilename relativos.
     let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
 
-    let mut bands: Vec<VrtBand> = Vec::new();
+    // (número de banda declarado, VrtBand) — el número se valida y se usa
+    // para ORDENAR antes de devolver `bands` (ver más abajo). El orden
+    // documental del XML NO es confiable: un `.vrt` regenerado/editado puede
+    // declarar `band="2"` antes que `band="1"` (GDAL lo permite), y como el
+    // resto del motor asume banda 1 = amplitud / banda 2 = fase (`.unw`) o
+    // banda 1 = magnitud / banda 2 = coherencia (`.cor` de 2 bandas), leer
+    // por orden documental en vez de por el atributo `band` puede intercambiar
+    // amplitud y fase en silencio — resultados basura sin ningún error.
+    let mut numbered_bands: Vec<(usize, VrtBand)> = Vec::new();
     for band_node in root
         .children()
         .filter(|n| n.is_element() && n.tag_name().name() == "VRTRasterBand")
@@ -149,6 +157,8 @@ pub(crate) fn parse_vrt(path: &Path) -> Result<VrtLayout> {
                 path.display()
             )));
         }
+
+        let band_num = parse_attr_usize(&band_node, "band", path)?;
 
         let data_type = band_node.attribute("dataType").ok_or_else(|| {
             InsarError::UnsupportedFormat(format!("{}: banda sin dataType", path.display()))
@@ -175,22 +185,38 @@ pub(crate) fn parse_vrt(path: &Path) -> Result<VrtLayout> {
         })?;
         let source = base_dir.join(source_rel.trim());
 
-        bands.push(VrtBand {
-            data_type: data_type.to_string(),
-            byte_order_lsb,
-            image_offset,
-            pixel_offset,
-            line_offset,
-            source,
-        });
+        numbered_bands.push((
+            band_num,
+            VrtBand {
+                data_type: data_type.to_string(),
+                byte_order_lsb,
+                image_offset,
+                pixel_offset,
+                line_offset,
+                source,
+            },
+        ));
     }
 
-    if bands.is_empty() {
+    if numbered_bands.is_empty() {
         return Err(InsarError::UnsupportedFormat(format!(
             "{}: ninguna VRTRasterBand",
             path.display()
         )));
     }
+
+    numbered_bands.sort_by_key(|(n, _)| *n);
+    let n = numbered_bands.len();
+    for (expected, (actual, _)) in (1..=n).zip(numbered_bands.iter()) {
+        if *actual != expected {
+            return Err(InsarError::UnsupportedFormat(format!(
+                "{}: números de banda no son 1..={n} sin huecos ni duplicados (se encontró {actual} \
+                 en la posición que esperaba {expected})",
+                path.display()
+            )));
+        }
+    }
+    let bands = numbered_bands.into_iter().map(|(_, b)| b).collect();
 
     Ok(VrtLayout {
         width,
@@ -586,7 +612,26 @@ pub fn read_isce_coherence(dir: &Path, config: &IsceLoadConfig) -> Result<Array3
     // Mismo descubrimiento y ORDEN que read_isce_unwrapped_stack.
     let pair_dirs = list_pair_dirs(dir)?;
     stack_pair_layers(&pair_dirs, &config.cor_filename, |layout| {
-        let mut coh = read_raw_band(layout, 1)?;
+        // La coherencia de ISCE viene en 1 o 2 bandas según el procesador:
+        // topsStack (`filt_fine.cor`, el default de este módulo) escribe 1
+        // banda con la coherencia directa; stripmapApp/topsApp
+        // (`topophase.cor`) escriben BIL de 2 bandas — banda 1 = magnitud,
+        // banda 2 = coherencia. Leer siempre banda 1 asumiría que la
+        // variante de 2 bandas es de 1, metiendo la MAGNITUD (no la
+        // coherencia) como pesos WLS y criterio de referencia — sin ningún
+        // error, resultados basura silenciosos.
+        let coh_band = match layout.bands.len() {
+            1 => 1,
+            2 => 2,
+            n => {
+                return Err(InsarError::UnsupportedFormat(format!(
+                    "{}: {n} bandas no soportadas para coherencia (se esperaba 1 banda de \
+                     coherencia directa o 2 bandas magnitud+coherencia)",
+                    layout.bands[0].source.display()
+                )));
+            }
+        };
+        let mut coh = read_raw_band(layout, coh_band)?;
         if config.mask_zero_amplitude {
             let cor_source = &layout.bands[0].source;
             let pair_dir = cor_source.parent().ok_or_else(|| {
@@ -903,6 +948,92 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// Igual a [`synthetic_vrt_2band`] pero con las `VRTRasterBand` declaradas
+    /// en orden INVERSO en el XML (`band="2"` antes que `band="1"`) —
+    /// reproduce el escenario de A-5 donde el orden documental no coincide
+    /// con el atributo `band`.
+    fn synthetic_vrt_2band_orden_invertido(src: &str, rows: usize, cols: usize) -> String {
+        let pixel_offset = 8;
+        let line_offset = 8 * cols;
+        format!(
+            "<VRTDataset rasterXSize=\"{cols}\" rasterYSize=\"{rows}\">\n\
+             <VRTRasterBand band=\"2\" dataType=\"Float32\" subClass=\"VRTRawRasterBand\">\n\
+               <SourceFilename relativeToVRT=\"1\">{src}</SourceFilename>\n\
+               <ByteOrder>LSB</ByteOrder>\n\
+               <ImageOffset>4</ImageOffset><PixelOffset>{pixel_offset}</PixelOffset>\
+               <LineOffset>{line_offset}</LineOffset>\n\
+             </VRTRasterBand>\n\
+             <VRTRasterBand band=\"1\" dataType=\"Float32\" subClass=\"VRTRawRasterBand\">\n\
+               <SourceFilename relativeToVRT=\"1\">{src}</SourceFilename>\n\
+               <ByteOrder>LSB</ByteOrder>\n\
+               <ImageOffset>0</ImageOffset><PixelOffset>{pixel_offset}</PixelOffset>\
+               <LineOffset>{line_offset}</LineOffset>\n\
+             </VRTRasterBand>\n\
+             </VRTDataset>\n"
+        )
+    }
+
+    /// Regresión A-5: el orden documental del XML no debe importar, solo el
+    /// atributo `band`. Antes del fix, `parse_vrt` devolvía las bandas en el
+    /// orden de aparición en el XML — con esta declaración invertida habría
+    /// intercambiado banda 1 (amplitud) y banda 2 (fase) en silencio.
+    #[test]
+    fn parse_vrt_ignora_orden_documental_usa_atributo_band() {
+        let dir = temp_dir("band_orden_invertido");
+        let (rows, cols) = (3, 4);
+        let src = "raw.bin";
+        write_raw_2band(&dir.join(src), rows, cols);
+        fs::write(dir.join("raw.vrt"), synthetic_vrt_2band_orden_invertido(src, rows, cols)).unwrap();
+
+        let layout = parse_vrt(&dir.join("raw.vrt")).unwrap();
+        // bands[0] debe ser la banda declarada band="1" (image_offset 0),
+        // aunque aparezca SEGUNDA en el XML.
+        assert_eq!(layout.bands[0].image_offset, 0);
+        assert_eq!(layout.bands[1].image_offset, 4);
+
+        let b1 = read_raw_band(&layout, 1).unwrap();
+        let b2 = read_raw_band(&layout, 2).unwrap();
+        for r in 0..rows {
+            for c in 0..cols {
+                assert_eq!(b1[[r, c]], band1_val(r, c), "b1[{r},{c}]");
+                assert_eq!(b2[[r, c]], band2_val(r, c), "b2[{r},{c}]");
+            }
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parse_vrt_numeros_de_banda_con_hueco_es_error() {
+        let dir = temp_dir("band_hueco");
+        let vrt = "<VRTDataset rasterXSize=\"2\" rasterYSize=\"2\">\n\
+            <VRTRasterBand band=\"1\" dataType=\"Float32\" subClass=\"VRTRawRasterBand\">\n\
+            <SourceFilename relativeToVRT=\"1\">x.bin</SourceFilename>\n\
+            <ImageOffset>0</ImageOffset><PixelOffset>4</PixelOffset><LineOffset>8</LineOffset>\n\
+            </VRTRasterBand>\n\
+            <VRTRasterBand band=\"3\" dataType=\"Float32\" subClass=\"VRTRawRasterBand\">\n\
+            <SourceFilename relativeToVRT=\"1\">x.bin</SourceFilename>\n\
+            <ImageOffset>4</ImageOffset><PixelOffset>4</PixelOffset><LineOffset>8</LineOffset>\n\
+            </VRTRasterBand></VRTDataset>";
+        fs::write(dir.join("bad.vrt"), vrt).unwrap();
+        let err = parse_vrt(&dir.join("bad.vrt")).unwrap_err();
+        assert!(matches!(err, InsarError::UnsupportedFormat(_)), "got: {err:?}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parse_vrt_sin_atributo_band_es_error() {
+        let dir = temp_dir("band_faltante");
+        let vrt = "<VRTDataset rasterXSize=\"2\" rasterYSize=\"2\">\n\
+            <VRTRasterBand dataType=\"Float32\" subClass=\"VRTRawRasterBand\">\n\
+            <SourceFilename relativeToVRT=\"1\">x.bin</SourceFilename>\n\
+            <ImageOffset>0</ImageOffset><PixelOffset>4</PixelOffset><LineOffset>8</LineOffset>\n\
+            </VRTRasterBand></VRTDataset>";
+        fs::write(dir.join("bad.vrt"), vrt).unwrap();
+        let err = parse_vrt(&dir.join("bad.vrt")).unwrap_err();
+        assert!(matches!(err, InsarError::UnsupportedFormat(_)), "got: {err:?}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn fase_enmascarada_donde_amplitud_cero() {
         // band1_val(0,0) == 0 → NoData de ISCE: la fase (0,0) debe salir NaN;
@@ -955,6 +1086,78 @@ mod tests {
         let stack = read_isce_unwrapped_stack(&root, &config).unwrap();
         assert_eq!(stack.data[[0, 0, 0]], band2_val(0, 0));
 
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Regresión A-6: variantes de `.cor` con 2 bandas (stripmapApp/topsApp
+    /// `topophase.cor`: banda 1 = magnitud, banda 2 = coherencia) deben leer
+    /// la banda 2, no la 1. Antes del fix, `read_isce_coherence` asumía
+    /// siempre banda 1 — con un `.cor` de 2 bandas habría entregado magnitud
+    /// (no coherencia) como pesos WLS y criterio de referencia, sin error.
+    #[test]
+    fn read_isce_coherence_2_bandas_lee_banda_2() {
+        let root = minimal_isce_stack("coh_2band");
+        let pair = root.join("20230101_20230113");
+        let (rows, cols) = (3, 4);
+        let cor_src = "filt_fine.cor";
+        write_raw_2band(&pair.join(cor_src), rows, cols);
+        fs::write(pair.join("filt_fine.cor.vrt"), synthetic_vrt_2band(cor_src, rows, cols)).unwrap();
+
+        // mask_zero_amplitude=false: aísla la lectura de banda de la lógica
+        // de enmascarado (ya cubierta por otros tests).
+        let config = IsceLoadConfig { mask_zero_amplitude: false, ..IsceLoadConfig::default() };
+        let coh = read_isce_coherence(&root, &config).unwrap();
+        assert_eq!(coh.dim(), (1, rows, cols));
+        for r in 0..rows {
+            for c in 0..cols {
+                assert_eq!(
+                    coh[[0, r, c]],
+                    band2_val(r, c),
+                    "coh[{r},{c}] debe ser la banda 2 (coherencia), no la banda 1 (magnitud)"
+                );
+            }
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn read_isce_coherence_mas_de_2_bandas_es_error() {
+        let root = minimal_isce_stack("coh_3band");
+        let pair = root.join("20230101_20230113");
+        let (rows, cols) = (3, 4);
+        let cor_src = "filt_fine.cor";
+        let pixel_offset = 12u64;
+        let line_offset = pixel_offset * cols as u64;
+        let mut buf = Vec::with_capacity(rows * cols * pixel_offset as usize);
+        for r in 0..rows {
+            for c in 0..cols {
+                buf.extend_from_slice(&(r as f32).to_le_bytes());
+                buf.extend_from_slice(&(c as f32).to_le_bytes());
+                buf.extend_from_slice(&1.0f32.to_le_bytes());
+            }
+        }
+        fs::write(pair.join(cor_src), buf).unwrap();
+        let band = |n: usize, offset: u64| {
+            format!(
+                "<VRTRasterBand band=\"{n}\" dataType=\"Float32\" subClass=\"VRTRawRasterBand\">\n\
+                   <SourceFilename relativeToVRT=\"1\">{cor_src}</SourceFilename>\n\
+                   <ByteOrder>LSB</ByteOrder>\n\
+                   <ImageOffset>{offset}</ImageOffset><PixelOffset>{pixel_offset}</PixelOffset>\
+                   <LineOffset>{line_offset}</LineOffset>\n\
+                 </VRTRasterBand>\n"
+            )
+        };
+        let vrt = format!(
+            "<VRTDataset rasterXSize=\"{cols}\" rasterYSize=\"{rows}\">\n{}{}{}</VRTDataset>\n",
+            band(1, 0),
+            band(2, 4),
+            band(3, 8),
+        );
+        fs::write(pair.join("filt_fine.cor.vrt"), vrt).unwrap();
+
+        let config = IsceLoadConfig { mask_zero_amplitude: false, ..IsceLoadConfig::default() };
+        let err = read_isce_coherence(&root, &config).unwrap_err();
+        assert!(matches!(err, InsarError::UnsupportedFormat(_)), "got: {err:?}");
         let _ = fs::remove_dir_all(&root);
     }
 
