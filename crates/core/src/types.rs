@@ -177,6 +177,8 @@ fn validate_pairs(n_layers: usize, pairs: &[IfgPair], n_epochs: usize) -> Result
             n_layers
         )));
     }
+    let mut seen: std::collections::HashSet<(usize, usize)> =
+        std::collections::HashSet::with_capacity(pairs.len());
     for (i, p) in pairs.iter().enumerate() {
         if p.reference >= n_epochs || p.secondary >= n_epochs {
             return Err(InsarError::InvalidNetwork(format!(
@@ -187,6 +189,32 @@ fn validate_pairs(n_layers: usize, pairs: &[IfgPair], n_epochs: usize) -> Result
         if p.reference == p.secondary {
             return Err(InsarError::InvalidNetwork(format!(
                 "par {i}: referencia y secundaria son la misma época"
+            )));
+        }
+        // Contrato de IfgPair: `reference` es la época más antigua (mismo
+        // requisito que ya exige `network::design_matrix`). Sin este chequeo
+        // aquí, un par con la convención invertida (algunos GUNW
+        // "secondary-first") pasaba `stack.validate()` y luego
+        // `unwrap_error::build_closure_loops` lo indexaba con la clave
+        // `(secondary, reference)` — que ningún lazo (a<b<c) consulta nunca
+        // — así que sus cierres de fase quedaban sin evaluar en silencio: el
+        // QC de cierre reportaba "stack limpio" sin haber revisado ese par.
+        if p.reference > p.secondary {
+            return Err(InsarError::InvalidNetwork(format!(
+                "par {i}: referencia ({}) posterior a secundaria ({}); \
+                 el contrato exige reference < secondary",
+                p.reference, p.secondary
+            )));
+        }
+        // Pares duplicados (mismo (reference, secondary) dos veces): la red
+        // SBAS no debería tenerlos, y silenciosamente solo el primero
+        // participa en `build_closure_loops`/`network::design_matrix` — el
+        // segundo queda fuera de la detección de cierres y de la inversión
+        // sin ningún aviso.
+        if !seen.insert((p.reference, p.secondary)) {
+            return Err(InsarError::InvalidNetwork(format!(
+                "par {i}: ({}, {}) duplicado — ya declarado antes en el stack",
+                p.reference, p.secondary
             )));
         }
     }
@@ -242,5 +270,44 @@ mod tests {
             meta: meta(),
         };
         assert!(stack.validate().is_err());
+    }
+
+    /// Regresión A-11: un par con la convención invertida (`reference >
+    /// secondary`, algunos GUNW "secondary-first") pasaba `validate()` sin
+    /// error y luego `unwrap_error::build_closure_loops` lo indexaba con una
+    /// clave que ningún lazo consulta — sus cierres de fase quedaban sin
+    /// evaluar en silencio. Debe rechazarse aquí, en el contrato compartido.
+    #[test]
+    fn validate_rechaza_par_con_referencia_posterior_a_secundaria() {
+        let stack = UnwrappedStack {
+            data: Array3::zeros((1, 4, 4)),
+            epochs: epochs(),
+            pairs: vec![IfgPair { reference: 1, secondary: 0, perp_baseline_m: 0.0 }],
+            meta: meta(),
+        };
+        assert!(matches!(
+            stack.validate().unwrap_err(),
+            InsarError::InvalidNetwork(_)
+        ));
+    }
+
+    /// Regresión A-11: pares duplicados (mismo (reference, secondary) dos
+    /// veces) dejaban el segundo fuera de `build_closure_loops`/
+    /// `network::design_matrix` sin ningún aviso.
+    #[test]
+    fn validate_rechaza_pares_duplicados() {
+        let stack = UnwrappedStack {
+            data: Array3::zeros((2, 4, 4)),
+            epochs: epochs(),
+            pairs: vec![
+                IfgPair { reference: 0, secondary: 1, perp_baseline_m: 0.0 },
+                IfgPair { reference: 0, secondary: 1, perp_baseline_m: 5.0 },
+            ],
+            meta: meta(),
+        };
+        assert!(matches!(
+            stack.validate().unwrap_err(),
+            InsarError::InvalidNetwork(_)
+        ));
     }
 }
