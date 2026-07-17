@@ -5,6 +5,13 @@ versionado: [SemVer](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-07-17
+
+Primer release publicado a crates.io/PyPI. Reúne el trabajo del backlog v0.2
+acumulado desde el tag v0.1.0 (nunca publicado): pipeline ISCE end-to-end
+unificado, backend SNAPHU, corrección troposférica ERA5, mmap del camino ISCE
+y un batch de hardening numérico/validación.
+
 ### Backend SNAPHU opcional para el desenrollado 2D (G-3 del backlog v0.2)
 
 Shell-out a un binario `snaphu` instalado por separado (patrón estándar del
