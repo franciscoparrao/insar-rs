@@ -133,13 +133,20 @@ pub fn displacement_to_phase(displacement_m: f64, wavelength_m: f64) -> f64 {
 /// Si el píxel de referencia no tiene fase finita en un par, ese par no se
 /// puede referenciar y queda NaN (se descartará por píxel en la inversión).
 /// Error si `(row, col)` está fuera de la grilla.
-pub fn reference_to_pixel(stack: &mut UnwrappedStack, row: usize, col: usize) -> Result<()> {
+///
+/// Devuelve el número de pares (de `stack.n_layers()`) que quedaron
+/// completamente en NaN por no tener fase finita en el píxel de referencia —
+/// el caller debe advertir si este número es alto en relación al total, ya
+/// que cada uno de esos pares se pierde por completo para *todos* los
+/// píxeles del stack, no solo para el de referencia.
+pub fn reference_to_pixel(stack: &mut UnwrappedStack, row: usize, col: usize) -> Result<usize> {
     let (n_rows, n_cols) = stack.dims();
     if row >= n_rows || col >= n_cols {
         return Err(InsarError::DimensionMismatch(format!(
             "píxel de referencia ({row}, {col}) fuera de la grilla {n_rows}×{n_cols}"
         )));
     }
+    let mut n_lost = 0usize;
     for k in 0..stack.n_layers() {
         let mut layer = stack.data.index_axis_mut(Axis(0), k);
         let ref_phase = layer[[row, col]];
@@ -147,9 +154,10 @@ pub fn reference_to_pixel(stack: &mut UnwrappedStack, row: usize, col: usize) ->
             layer.mapv_inplace(|v| v - ref_phase);
         } else {
             layer.fill(f32::NAN);
+            n_lost += 1;
         }
     }
-    Ok(())
+    Ok(n_lost)
 }
 
 /// Invierte la serie temporal de desplazamiento LOS por píxel (modo v0.1:
@@ -235,10 +243,29 @@ pub fn invert_sbas_ext(
     }
 
     // Columna de error de DEM (desplazamiento por metro de Δz), si se pide.
+    // Se ESCALA a norma unitaria antes de armar la matriz de diseño: sus
+    // elementos crudos (`g_k = -B⊥_k/(R·sinθ)`, ~2e-4, ver doc de
+    // `dem_error_column`) son ~1e4 veces menores que los de la matriz de
+    // incrementos (0/1) — sin escalar, eso infla el número de condición de
+    // `AᵀWA` en ~1e7-1e8 incluso antes de cualquier colinealidad real,
+    // reduciendo el margen que le queda a la guarda de `solve_normal_eqs`
+    // para detectar casos genuinamente singulares (p. ej. deriva orbital
+    // lineal, `B⊥_k ≈ β·Δt_k`, que hace la columna DEM colineal con la
+    // matriz de incrementos). `dem_scale` se aplica de vuelta en
+    // `write_solution` al extraer Δz; costo cero por píxel, la escala es
+    // global. `dem_error_column` garantiza al menos una baseline no nula, así
+    // que la norma siempre es > 0 cuando `dem_col` es `Some`.
     let dem_col: Option<Vec<f64>> = match &config.dem_error {
         Some(d) => Some(dem_error_column(&stack.pairs, stack.meta.incidence_deg, d)?),
         None => None,
     };
+    let dem_scale = dem_col
+        .as_ref()
+        .map(|g| g.iter().map(|v| v * v).sum::<f64>().sqrt());
+    let dem_col: Option<Vec<f64>> = dem_col.map(|g| {
+        let scale = dem_scale.unwrap();
+        g.into_iter().map(|v| v / scale).collect()
+    });
     let n_incr = n_epochs - 1;
     let n_unknowns = n_incr + usize::from(dem_col.is_some());
 
@@ -271,7 +298,10 @@ pub fn invert_sbas_ext(
         None => (0..n_rows).map(|_| None).collect(),
     };
 
-    // Escribe la solución x (incrementos [+ Δz]) en el píxel (fila implícita, c).
+    // Escribe la solución x (incrementos [+ Δz]) en el píxel (fila implícita,
+    // c). `x[n_incr]` viene en unidades de la columna DEM ESCALADA
+    // (`dem_scale`, ver arriba) — se des-escala aquí, el único lugar donde
+    // Δz se extrae del vector solución.
     let write_solution = |x: &DVector<f64>,
                           out_row: &mut ndarray::ArrayViewMut2<'_, f32>,
                           dem_row: &mut Option<ndarray::ArrayViewMut1<'_, f32>>,
@@ -283,7 +313,9 @@ pub fn invert_sbas_ext(
             out_row[[e, c]] = acc as f32;
         }
         if let Some(dem) = dem_row {
-            dem[c] = x[n_incr] as f32;
+            // Columna escalada g' = g/scale ⇒ el coeficiente ajustado es
+            // `scale·Δz` (no `Δz/scale`): des-escalar es DIVIDIR por `scale`.
+            dem[c] = (x[n_incr] / dem_scale.unwrap_or(1.0)) as f32;
         }
     };
 
@@ -491,10 +523,27 @@ pub fn invert_sbas_ext(
     })
 }
 
+/// Umbral relativo mínimo de pivote de Cholesky (`l_ii` más chico / más
+/// grande del factor `L`, con `N = L·Lᵀ`) para aceptar la solución de
+/// [`solve_normal_eqs`]. El número de condición de `N` escala
+/// aproximadamente como el CUADRADO de esta razón, así que `1e-6` aquí
+/// equivale a rechazar condicionamientos peores que ~1e12 — el umbral
+/// estándar de "numéricamente singular" en `f64` (cf. las tolerancias
+/// estilo LAPACK ya usadas en este módulo para la pseudoinversa SVD).
+///
+/// Sin esta guarda, Cholesky puede "tener éxito" con un pivote de puro
+/// redondeo (~1e-16) cuando el sistema normal es matemáticamente singular
+/// — el caso más común es la columna de error de DEM colineal con la matriz
+/// de incrementos (deriva orbital lineal, `B⊥_k ≈ β·Δt_k` ⇒ `g ∝ A·Δt`) — y
+/// entregar un Δz de magnitud arbitraria que además corrompe los
+/// incrementos, sin ningún error ni NaN.
+const CHOLESKY_MIN_RELATIVE_PIVOT: f64 = 1e-6;
+
 /// Arma y resuelve las ecuaciones normales ponderadas `(AᵀWA)·x = AᵀW·b`
 /// sobre las filas `valid_idx` de `a_ext` (con `b`/`w` alineados a
 /// `valid_idx`), reutilizando los buffers `nmat`/`yvec`. `None` si el sistema
-/// normal no es definido positivo (Cholesky falla).
+/// normal no es definido positivo (Cholesky falla) o si su condicionamiento
+/// es demasiado pobre ([`CHOLESKY_MIN_RELATIVE_PIVOT`]).
 fn solve_normal_eqs(
     a_ext: &DMatrix<f64>,
     valid_idx: &[usize],
@@ -525,7 +574,16 @@ fn solve_normal_eqs(
             nmat[(i, j)] = nmat[(j, i)];
         }
     }
-    nmat.clone().cholesky().map(|ch| ch.solve(yvec))
+    nmat.clone().cholesky().and_then(|ch| {
+        let diag = ch.l().diagonal();
+        let max_l = diag.iter().copied().fold(0.0_f64, f64::max);
+        let min_l = diag.iter().copied().fold(f64::INFINITY, f64::min);
+        if max_l <= 0.0 || min_l / max_l < CHOLESKY_MIN_RELATIVE_PIVOT {
+            None
+        } else {
+            Some(ch.solve(yvec))
+        }
+    })
 }
 
 /// Columna de error de DEM en unidades de desplazamiento LOS por metro de Δz:
@@ -610,10 +668,19 @@ fn reduced_pinv(
     svd.pseudo_inverse(eps).ok()
 }
 
-/// Píxel de referencia sugerido: el de máxima coherencia media temporal
-/// (media de las capas finitas por píxel; empates → menor (fila, col) para
-/// determinismo). `coh`: pares × filas × cols. `None` si ningún píxel tiene
-/// coherencia finita. Compartido por el pipeline, la CLI y los bindings.
+/// Píxel de referencia sugerido: prioriza la **validez temporal** (número de
+/// pares con coherencia finita) por sobre la coherencia media, y usa esta
+/// última solo para desempatar entre píxeles igualmente válidos; empates
+/// finales → menor (fila, col) para determinismo. `coh`: pares × filas ×
+/// cols. `None` si ningún píxel tiene coherencia finita. Compartido por el
+/// pipeline, la CLI y los bindings.
+///
+/// Priorizar `n` antes que la media evita un modo de falla visto en
+/// producción: un píxel de borde con coherencia finita en solo 2 de 100
+/// pares (media 0.99 sobre esos 2) le ganaba a uno finito en los 100 pares
+/// (media 0.95) — y como [`reference_to_pixel`] rellena con NaN cada capa
+/// donde la referencia no es finita, elegir ese píxel de borde destruye 98
+/// interferogramas completos para *todos* los píxeles del stack.
 ///
 /// `region`: si se da, restringe la búsqueda a los píxeles `true` de esta
 /// máscara (mismas dims que `coh`). Necesario porque el stack de entrada
@@ -635,7 +702,9 @@ pub fn select_reference_pixel(
     (0..n_rows)
         .into_par_iter()
         .map(|r| {
-            let mut best: Option<(f32, (usize, usize))> = None;
+            // Clave de comparación (n_válidos, media): el orden lexicográfico
+            // de tuplas hace que `n_válidos` domine y `media` solo desempate.
+            let mut best: Option<((u32, f32), (usize, usize))> = None;
             for c in 0..n_cols {
                 if region.is_some_and(|m| !m[[r, c]]) {
                     continue;
@@ -650,8 +719,9 @@ pub fn select_reference_pixel(
                 }
                 if n > 0 {
                     let mean = (sum / f64::from(n)) as f32;
-                    if best.is_none_or(|(bm, _)| mean > bm) {
-                        best = Some((mean, (r, c)));
+                    let key = (n, mean);
+                    if best.is_none_or(|(bk, _)| key > bk) {
+                        best = Some((key, (r, c)));
                     }
                 }
             }
@@ -662,7 +732,7 @@ pub fn select_reference_pixel(
             |a, b| match (a, b) {
                 (None, x) | (x, None) => x,
                 (Some(x), Some(y)) => {
-                    // Mayor media gana; empate → menor (fila, col).
+                    // Mayor (n_válidos, media) gana; empate → menor (fila, col).
                     if y.0 > x.0 || (y.0 == x.0 && y.1 < x.1) { Some(y) } else { Some(x) }
                 }
             },
@@ -1545,6 +1615,44 @@ mod tests {
         ));
     }
 
+    /// Regresión A-12: si las baselines perpendiculares son EXACTAMENTE
+    /// proporcionales al tiempo (deriva orbital lineal, `B⊥_k = β·Δt_k` —
+    /// físicamente común), la columna de error de DEM cae exactamente en el
+    /// espacio columna de la matriz de incrementos y el sistema normal
+    /// (camino WLS/IRLS, `solve_normal_eqs`) es matemáticamente singular.
+    /// Antes de la guarda de condicionamiento, Cholesky podía "tener éxito"
+    /// con un pivote de puro redondeo y entregar un Δz de magnitud
+    /// arbitraria que además corrompe los incrementos. Debe dar NaN
+    /// (píxel indeterminado), no un número — con o sin ese número siendo
+    /// "razonable" por casualidad.
+    #[test]
+    fn dem_error_colineal_con_incrementos_por_deriva_orbital_da_nan() {
+        let epochs = epochs_12d(4);
+        let mut pairs = pairs_4ep();
+        let beta_per_day = 50.0 / 12.0; // m/día de deriva orbital sintética
+        for p in pairs.iter_mut() {
+            let dt_days = epochs[p.secondary].days_since(&epochs[p.reference]) as f64;
+            p.perp_baseline_m = beta_per_day * dt_days;
+        }
+        let d = true_displacements(&epochs);
+        let mut data = Array3::<f32>::zeros((pairs.len(), 1, 1));
+        for (k, p) in pairs.iter().enumerate() {
+            let dd = d[p.secondary] - d[p.reference];
+            data[[k, 0, 0]] = (-4.0 * PI / SENTINEL1_WAVELENGTH_M * dd) as f32;
+        }
+        let stack = UnwrappedStack { data, epochs, pairs, meta: meta() };
+
+        let coh = Array3::from_elem(stack.data.dim(), 0.85_f32);
+        let cfg = SbasSolverConfig {
+            weighting: WeightScheme::InversePhaseVariance,
+            dem_error: Some(DemErrorConfig { slant_range_m: SLANT_RANGE }),
+            robust: None,
+        };
+        let sol = invert_sbas_ext(&stack, None, Some(&coh), &cfg).unwrap();
+        let dem = sol.dem_error_m.expect("mapa Δz presente");
+        assert!(dem[[0, 0]].is_nan(), "Δz debería quedar NaN por colinealidad, no {}", dem[[0, 0]]);
+    }
+
     // ---------- invert_sbas_ext: inversión robusta L1 (IRLS) ----------
 
     /// Stack sintético con red COMPLETA de 4 épocas (6 pares): cada
@@ -1803,6 +1911,26 @@ mod tests {
         assert_eq!(select_reference_pixel(&coh, Some(&mismatch)), None);
     }
 
+    /// Regresión: un píxel de borde finito en solo 2 de 10 pares (media 0.99
+    /// sobre esos 2) NO debe ganarle a uno finito en los 10 pares completos
+    /// (media 0.95) — la validez temporal domina sobre la coherencia media.
+    /// Antes de este fix, el borde ganaba y `reference_to_pixel` destruía los
+    /// 8 pares restantes para todo el stack.
+    #[test]
+    fn referencia_prioriza_validez_temporal_sobre_media() {
+        let n_pairs = 10;
+        let mut coh = Array3::from_elem((n_pairs, 2, 2), f32::NAN);
+        // (0, 0): válido en los 10 pares, coherencia 0.95.
+        for k in 0..n_pairs {
+            coh[[k, 0, 0]] = 0.95;
+        }
+        // (0, 1): "borde" válido en solo 2 pares, coherencia 0.99 en esos 2.
+        coh[[0, 0, 1]] = 0.99;
+        coh[[1, 0, 1]] = 0.99;
+
+        assert_eq!(select_reference_pixel(&coh, None), Some((0, 0)));
+    }
+
     // ---------- estimate_velocity ----------
 
     #[test]
@@ -1873,7 +2001,8 @@ mod tests {
             let off = 3.0 + k as f32;
             stack.data.index_axis_mut(ndarray::Axis(0), k).mapv_inplace(|v| v + off);
         }
-        reference_to_pixel(&mut stack, 0, 0).unwrap();
+        let n_lost = reference_to_pixel(&mut stack, 0, 0).unwrap();
+        assert_eq!(n_lost, 0, "el píxel de referencia es finito en todos los pares");
         // El píxel de referencia queda en 0 para todos los pares.
         for k in 0..stack.pairs.len() {
             assert!(stack.data[[k, 0, 0]].abs() < 1e-6);
@@ -1883,6 +2012,24 @@ mod tests {
         let series = invert_sbas(&stack, None).unwrap();
         for e in 0..4 {
             assert!(series.data[[e, 1, 1]].abs() < 1e-5);
+        }
+    }
+
+    /// Regresión: `reference_to_pixel` debe reportar cuántos pares quedaron
+    /// en NaN por no tener fase finita en el píxel de referencia — antes este
+    /// dato se perdía y la aniquilación de capas completas pasaba inadvertida.
+    #[test]
+    fn referencia_reporta_pares_perdidos_por_nan() {
+        let mut stack = synthetic_stack(2, 2);
+        // El píxel de referencia (0,0) queda NaN en el primer par únicamente.
+        stack.data[[0, 0, 0]] = f32::NAN;
+        let n_lost = reference_to_pixel(&mut stack, 0, 0).unwrap();
+        assert_eq!(n_lost, 1);
+        // Ese par queda enteramente NaN (todos los píxeles, no solo (0,0)).
+        assert!(stack.data.index_axis(ndarray::Axis(0), 0).iter().all(|v| v.is_nan()));
+        // El resto de los pares sí quedó referenciado (no NaN).
+        for k in 1..stack.pairs.len() {
+            assert!(stack.data[[k, 0, 0]].abs() < 1e-6);
         }
     }
 
