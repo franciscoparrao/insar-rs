@@ -59,12 +59,35 @@ use ndarray::Array2;
 
 use crate::atmosphere::{self, ApsConfig};
 use crate::error::{InsarError, IoResultExt, Result};
-use crate::inversion::SbasSolverConfig;
+use crate::inversion::{SbasSolverConfig, WeightScheme};
+use crate::io::isce::IsceLoadConfig;
 use crate::network::SbasConfig;
 use crate::postprocess::RampKind;
 use crate::types::{DisplacementSeries, PsCandidate, VelocityMap};
 use crate::unwrap_error::UnwrapCorrectionReport;
 use crate::{inversion, io, postprocess, ps, unwrap, unwrap_error};
+
+/// Construye la máscara booleana para restringir la auto-selección de
+/// referencia (`inversion::select_reference_pixel`) a
+/// `region = (fila_min, col_min, fila_max, col_max)`, saturando los límites
+/// superiores a las dimensiones reales del stack. Compartida por [`run_sbas`]
+/// y [`run_sbas_isce`] — antes de extraerla, esta lógica estaba copiada
+/// carácter por carácter entre este módulo y la CLI (`Isce`).
+fn reference_region_mask(
+    n_rows: usize,
+    n_cols: usize,
+    region: Option<(usize, usize, usize, usize)>,
+) -> Option<Array2<bool>> {
+    region.map(|(r0, c0, r1, c1)| {
+        let mut mask = Array2::from_elem((n_rows, n_cols), false);
+        for r in r0..=r1.min(n_rows.saturating_sub(1)) {
+            for c in c0..=c1.min(n_cols.saturating_sub(1)) {
+                mask[[r, c]] = true;
+            }
+        }
+        mask
+    })
+}
 
 /// Backend de desenrollado 2D usado por [`run_sbas`] (paso 3).
 #[derive(Debug, Clone, Default)]
@@ -149,6 +172,10 @@ pub struct SbasProducts {
     pub dem_error_m: Option<Array2<f32>>,
     /// Reporte de la corrección de cierre, si `correct_unwrap`.
     pub unwrap_report: Option<UnwrapCorrectionReport>,
+    /// Número de pares (de `n_pairs` totales) que quedaron completamente en
+    /// NaN por no tener fase finita en el píxel de referencia elegido — ver
+    /// [`inversion::reference_to_pixel`]. `0` si no se referenció el stack.
+    pub pairs_lost_by_reference: usize,
 }
 
 /// ¿Corresponde aplicar la corrección APS? Ver doc del módulo: con menos de
@@ -231,24 +258,17 @@ pub fn run_sbas(config: &SbasPipelineConfig) -> Result<SbasProducts> {
 
     // 5) Referenciado espacial (configurado > automático por coherencia,
     //    opcionalmente restringido a `reference_region`).
+    let (n_rows, n_cols) = unwrapped.dims();
+    let region_mask = reference_region_mask(n_rows, n_cols, config.reference_region);
     let reference = config.reference.or_else(|| {
-        let (n_rows, n_cols) = unwrapped.dims();
-        let region_mask = config.reference_region.map(|(r0, c0, r1, c1)| {
-            let mut mask = Array2::from_elem((n_rows, n_cols), false);
-            for r in r0..=r1.min(n_rows.saturating_sub(1)) {
-                for c in c0..=c1.min(n_cols.saturating_sub(1)) {
-                    mask[[r, c]] = true;
-                }
-            }
-            mask
-        });
         coherence
             .as_ref()
             .and_then(|coh| inversion::select_reference_pixel(coh, region_mask.as_ref()))
     });
-    if let Some((r, c)) = reference {
-        inversion::reference_to_pixel(&mut unwrapped, r, c)?;
-    }
+    let pairs_lost_by_reference = match reference {
+        Some((r, c)) => inversion::reference_to_pixel(&mut unwrapped, r, c)?,
+        None => 0,
+    };
 
     // 6) Inversión SBAS de la serie LOS (OLS/WLS ± error de DEM).
     let solution = inversion::invert_sbas_ext(
@@ -258,6 +278,15 @@ pub fn run_sbas(config: &SbasPipelineConfig) -> Result<SbasProducts> {
         &config.solver,
     )?;
     let mut series = solution.series;
+
+    // 6.5) Coherencia temporal del ajuste SBAS (Pepe & Lanari 2006): se
+    //    calcula aquí, ANTES de APS/deramp, porque mide la consistencia entre
+    //    la fase observada y la reconstruida por la inversión. Calcularla
+    //    después de corregir APS/deramp mediría en cambio el residuo que esas
+    //    correcciones dejan — y las sesgaría hacia gamma bajo justo en los
+    //    píxeles donde la corrección funcionó mejor (más atmósfera/rampa
+    //    removida = mayor discrepancia observado-vs-modelo post-corrección).
+    let gamma = postprocess::temporal_coherence(&unwrapped, &series)?;
 
     // 7) Corrección APS turbulento (se salta si la serie es demasiado corta
     //    o la ventana temporal degenera; ver doc del módulo).
@@ -270,9 +299,8 @@ pub fn run_sbas(config: &SbasPipelineConfig) -> Result<SbasProducts> {
         postprocess::deramp_series(&mut series, kind, None)?;
     }
 
-    // 9) Velocidad media LOS + coherencia temporal del ajuste.
+    // 9) Velocidad media LOS.
     let velocity = inversion::estimate_velocity(&series)?;
-    let gamma = postprocess::temporal_coherence(&unwrapped, &series)?;
 
     // 10) Productos a disco.
     fs::create_dir_all(&config.output_dir).with_path(&config.output_dir)?;
@@ -296,6 +324,164 @@ pub fn run_sbas(config: &SbasPipelineConfig) -> Result<SbasProducts> {
         temporal_coherence: gamma,
         dem_error_m: solution.dem_error_m,
         unwrap_report,
+        pairs_lost_by_reference,
+    })
+}
+
+/// Configuración de [`run_sbas_isce`]: variante del pipeline que lee un
+/// directorio de interferogramas ISCE ya desenrollados (`.unw`, subdirs
+/// `YYYYMMDD_YYYYMMDD`) en vez del formato nativo `stack.json` de
+/// [`run_sbas`]. No incluye paso de desenrollado propio (los `.unw` de ISCE
+/// ya vienen desenrollados) ni selección de PS (v0.1: siempre invierte la
+/// grilla completa); comparte con `run_sbas` el resto del flujo: corrección
+/// de cierre → referenciado → inversión → coherencia temporal → deramp.
+///
+/// Antes de esta función, la CLI (`insar isce`) y los bindings de Python
+/// (`sbas_from_isce`) reimplementaban esta orquestación por separado, con
+/// semánticas ya divergentes (Python omitía la corrección de cierre que la
+/// CLI aplica por defecto). Ambos front-ends ahora llaman a esta función.
+#[derive(Debug, Clone)]
+pub struct IsceSbasConfig {
+    /// Directorio de pares ISCE (subdirs `YYYYMMDD_YYYYMMDD`).
+    pub input_dir: PathBuf,
+    /// Nombres de archivo esperados, baselines, longitud de onda e
+    /// incidencia (ver [`IsceLoadConfig`]).
+    pub load: IsceLoadConfig,
+    /// Corregir errores de desenrollado por cierre de fase antes de invertir
+    /// (default `true`).
+    pub correct_unwrap: bool,
+    /// Píxel de referencia manual (fila, col). `None` = automático: máxima
+    /// coherencia media si hay coherencia, o el centro de la grilla si no
+    /// (a diferencia de [`SbasPipelineConfig::reference`], este camino
+    /// siempre cae a un píxel concreto — así se referencia siempre el stack).
+    pub reference: Option<(usize, usize)>,
+    /// Restringe la auto-selección a este rectángulo; ver
+    /// [`SbasPipelineConfig::reference_region`]. Ignorado si `reference` ya
+    /// viene fijado manualmente.
+    pub reference_region: Option<(usize, usize, usize, usize)>,
+    /// Solver de la inversión: pesos WLS y/o error de DEM.
+    pub solver: SbasSolverConfig,
+    /// Deramp de la serie tras la inversión (`None` = no).
+    pub deramp: Option<RampKind>,
+}
+
+impl IsceSbasConfig {
+    /// Config con los defaults: sin baselines, corrección de cierre activada,
+    /// referencia automática, OLS sin error de DEM, sin deramp.
+    pub fn new(input_dir: PathBuf) -> Self {
+        Self {
+            input_dir,
+            load: IsceLoadConfig::default(),
+            correct_unwrap: true,
+            reference: None,
+            reference_region: None,
+            solver: SbasSolverConfig::default(),
+            deramp: None,
+        }
+    }
+}
+
+/// Productos de [`run_sbas_isce`]. Superset de [`SbasProducts`]: agrega
+/// `velocity_std` (el camino ISCE sí estima la incertidumbre de velocidad,
+/// ver [`inversion::estimate_velocity_uncertainty`]) y `n_pairs` (para que
+/// los front-ends reporten cuántos pares se leyeron sin recalcularlo).
+#[derive(Debug, Clone)]
+pub struct IsceSbasProducts {
+    pub velocity: VelocityMap,
+    pub velocity_std: Array2<f32>,
+    pub series: DisplacementSeries,
+    /// Coherencia temporal γ (Pepe & Lanari 2006) del ajuste.
+    pub temporal_coherence: Array2<f32>,
+    /// Error de DEM Δz (m), si `solver.dem_error` se configuró.
+    pub dem_error_m: Option<Array2<f32>>,
+    /// Reporte de la corrección de cierre, si `correct_unwrap`.
+    pub unwrap_report: Option<UnwrapCorrectionReport>,
+    /// Conteo de cierres residuales tras la corrección (QC), si
+    /// `correct_unwrap` — ver [`unwrap_error::nonzero_closure_count`].
+    pub closure_qc: Option<Array2<f32>>,
+    /// Ver [`SbasProducts::pairs_lost_by_reference`].
+    pub pairs_lost_by_reference: usize,
+    /// Píxel de referencia efectivamente usado (manual, auto, o el centro de
+    /// la grilla si no había coherencia ni configuración).
+    pub reference: (usize, usize),
+    pub n_pairs: usize,
+    /// Si se encontró y usó coherencia (`.cor`) del directorio ISCE. `false`
+    /// implica: sin pesos WLS (error si `solver.weighting != Unit`) y
+    /// referencia automática sin restricción de calidad (cae al centro salvo
+    /// `reference`/`reference_region`).
+    pub has_coherence: bool,
+}
+
+/// Ejecuta el pipeline SBAS sobre un directorio ISCE ya desenrollado. Ver
+/// doc de [`IsceSbasConfig`] para el flujo y las diferencias con [`run_sbas`].
+/// No escribe productos a disco (a diferencia de `run_sbas`): los front-ends
+/// (CLI, Python) deciden si escribir GeoTIFFs o devolver arrays en memoria.
+pub fn run_sbas_isce(config: &IsceSbasConfig) -> Result<IsceSbasProducts> {
+    // 1) Stack ISCE ya desenrollado + coherencia opcional (calidad para
+    //    referencia automática y pesos WLS).
+    let mut stack = io::isce::read_isce_unwrapped_stack(&config.input_dir, &config.load)?;
+    let coherence = io::isce::read_isce_coherence(&config.input_dir, &config.load).ok();
+    if config.solver.weighting != WeightScheme::Unit && coherence.is_none() {
+        return Err(InsarError::Metadata(
+            "weighting != Unit requiere los .cor de coherencia del directorio ISCE".into(),
+        ));
+    }
+
+    // 2) Corrección de errores de desenrollado por cierre de fase + QC.
+    let (unwrap_report, closure_qc) = if config.correct_unwrap {
+        let report = unwrap_error::correct_unwrap_errors(&mut stack)?;
+        let qc = unwrap_error::nonzero_closure_count(&stack)?;
+        (Some(report), Some(qc))
+    } else {
+        (None, None)
+    };
+
+    // 3) Referenciado espacial: manual > automático por coherencia
+    //    (opcionalmente restringido a `reference_region`) > centro de la
+    //    grilla. A diferencia de `run_sbas`, este camino siempre referencia.
+    let (n_rows, n_cols) = stack.dims();
+    let region_mask = reference_region_mask(n_rows, n_cols, config.reference_region);
+    let (ref_r, ref_c) = config
+        .reference
+        .or_else(|| {
+            coherence
+                .as_ref()
+                .and_then(|coh| inversion::select_reference_pixel(coh, region_mask.as_ref()))
+        })
+        .unwrap_or((n_rows / 2, n_cols / 2));
+    let pairs_lost_by_reference = inversion::reference_to_pixel(&mut stack, ref_r, ref_c)?;
+
+    // 4) Inversión SBAS de la serie LOS (OLS/WLS ± error de DEM).
+    let n_pairs = stack.pairs.len();
+    let solution = inversion::invert_sbas_ext(&stack, None, coherence.as_ref(), &config.solver)?;
+    let mut series = solution.series;
+
+    // 4.5) Coherencia temporal ANTES de deramp — mismo racional que en
+    //    `run_sbas` (ver comentario ahí): medir la consistencia de la
+    //    inversión, no el residuo que deja el deramp posterior.
+    let gamma = postprocess::temporal_coherence(&stack, &series)?;
+
+    // 5) Deramp opcional.
+    if let Some(kind) = config.deramp {
+        postprocess::deramp_series(&mut series, kind, None)?;
+    }
+
+    // 6) Velocidad media LOS + incertidumbre.
+    let velocity = inversion::estimate_velocity(&series)?;
+    let velocity_std = inversion::estimate_velocity_uncertainty(&series)?;
+
+    Ok(IsceSbasProducts {
+        velocity,
+        velocity_std,
+        series,
+        temporal_coherence: gamma,
+        dem_error_m: solution.dem_error_m,
+        unwrap_report,
+        closure_qc,
+        pairs_lost_by_reference,
+        reference: (ref_r, ref_c),
+        n_pairs,
+        has_coherence: coherence.is_some(),
     })
 }
 
