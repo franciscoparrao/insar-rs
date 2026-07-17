@@ -70,7 +70,12 @@ fn main() {
     println!("variograma ajustado (wsse={:.3})", fit.wsse);
 
     // Kriging ordinario, vecindario de 40 puntos.
-    let cfg = KrigingConfig { method: KrigingMethod::Ordinary, max_neighbors: Some(40), ..Default::default() };
+    // KrigingConfig es #[non_exhaustive]: no se puede usar sintaxis de struct
+    // literal desde este crate aunque los campos sean pub, así que se
+    // construye con default() y se mutan los campos necesarios.
+    let mut cfg = KrigingConfig::default();
+    cfg.method = KrigingMethod::Ordinary;
+    cfg.max_neighbors = Some(40);
     let kr = Kriging::new(&data, &fit.model, cfg).unwrap();
 
     let t = std::time::Instant::now();

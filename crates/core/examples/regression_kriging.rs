@@ -117,7 +117,12 @@ fn main() {
         gaps.iter().flat_map(|&(r, c)| [dem[r * nc + c] as f64, slope(r, c) as f64]).collect(),
     ).unwrap();
     let trend_at_targets = predicted(&model.predict(&tcov).unwrap());
-    let cfg = KrigingConfig { method: KrigingMethod::Ordinary, max_neighbors: Some(40), ..Default::default() };
+    // KrigingConfig es #[non_exhaustive]: no se puede usar sintaxis de struct
+    // literal desde este crate aunque los campos sean pub, así que se
+    // construye con default() y se mutan los campos necesarios.
+    let mut cfg = KrigingConfig::default();
+    cfg.method = KrigingMethod::Ordinary;
+    cfg.max_neighbors = Some(40);
     let t = std::time::Instant::now();
     let est = rk.predict(&targets, &trend_at_targets, &fit.model, &cfg).unwrap();
     println!("regression kriging de {} huecos: {:.1}s", targets.len(), t.elapsed().as_secs_f64());
