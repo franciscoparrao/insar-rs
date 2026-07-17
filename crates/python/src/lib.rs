@@ -25,7 +25,7 @@ use insar_core::decompose::{
 };
 use insar_core::features::{FeatureConfig, extract_features as core_extract_features};
 use insar_core::inversion::{estimate_velocity as core_velocity, invert_sbas as core_invert};
-use insar_core::io::isce::{IsceLoadConfig, read_isce_coherence, read_isce_unwrapped_stack};
+use insar_core::io::isce::IsceLoadConfig;
 use insar_core::postprocess::{RampKind, remove_ramp as core_remove_ramp};
 use insar_core::ps::amplitude_dispersion as core_ad;
 use insar_core::types::{
@@ -222,9 +222,15 @@ fn temporal_coherence<'py>(
     Ok(gamma.into_pyarray_bound(py))
 }
 
-/// Lee un directorio de interferogramas ISCE, referencia al píxel de máxima
-/// coherencia media (elimina el offset por interferograma del desenrollado),
-/// invierte y estima velocidad y coherencia temporal.
+/// Lee un directorio de interferogramas ISCE, corrige errores de
+/// desenrollado por cierre de fase, referencia al píxel de máxima coherencia
+/// media (elimina el offset por interferograma del desenrollado), invierte y
+/// estima velocidad y coherencia temporal.
+///
+/// Orquestación compartida con `insar isce` de la CLI vía
+/// `insar_core::pipeline::run_sbas_isce` — antes cada front-end reimplementaba
+/// este flujo por separado y habían divergido (este binding no aplicaba la
+/// corrección de cierre que la CLI sí aplica por defecto).
 ///
 /// Devuelve `(velocity, velocity_std, series, temporal_coherence, epochs)`:
 ///   velocity:           (filas, cols) float32 m/año
@@ -247,43 +253,34 @@ fn sbas_from_isce<'py>(
     Bound<'py, PyArray2<f32>>,
     Vec<String>,
 )> {
-    let config = IsceLoadConfig {
-        baselines_dir: baselines_dir.map(std::path::PathBuf::from),
-        wavelength_m,
-        incidence_deg,
-        ..Default::default()
+    let config = insar_core::pipeline::IsceSbasConfig {
+        load: IsceLoadConfig {
+            baselines_dir: baselines_dir.map(std::path::PathBuf::from),
+            wavelength_m,
+            incidence_deg,
+            ..Default::default()
+        },
+        ..insar_core::pipeline::IsceSbasConfig::new(std::path::PathBuf::from(&ifg_dir))
     };
     // Todo el trabajo pesado (I/O de disco de cientos de pares + inversión)
     // corre SIN el GIL: otros threads Python siguen vivos mientras tanto.
-    let (velocity, vel_std, series, gamma, epochs) = py
-        .allow_threads(|| -> Result<_, InsarError> {
-            let dir = std::path::Path::new(&ifg_dir);
-            let mut stack = read_isce_unwrapped_stack(dir, &config)?;
-            let epochs: Vec<String> =
-                stack.epochs.iter().map(|e| e.0.to_string()).collect();
-
-            // Referencia espacial al píxel de máxima coherencia media (o el
-            // centro). La selección vive en el core (compartida con la CLI y
-            // el pipeline).
-            let (n_rows, n_cols) = stack.dims();
-            let (ref_r, ref_c) = read_isce_coherence(dir, &config)
-                .ok()
-                .and_then(|coh| insar_core::inversion::select_reference_pixel(&coh, None))
-                .unwrap_or((n_rows / 2, n_cols / 2));
-            insar_core::inversion::reference_to_pixel(&mut stack, ref_r, ref_c)?;
-
-            let series = core_invert(&stack, None)?;
-            let velocity = core_velocity(&series)?;
-            let vel_std = insar_core::inversion::estimate_velocity_uncertainty(&series)?;
-            let gamma = insar_core::inversion::temporal_coherence(&stack, &series)?;
-            Ok((velocity, vel_std, series, gamma, epochs))
-        })
+    let products = py
+        .allow_threads(|| insar_core::pipeline::run_sbas_isce(&config))
         .map_err(err)?;
+    if products.pairs_lost_by_reference > 0 {
+        eprintln!(
+            "advertencia: {} pares quedaron sin fase finita en el píxel de referencia y se \
+             perdieron por completo (rellenados con NaN)",
+            products.pairs_lost_by_reference
+        );
+    }
+    let epochs: Vec<String> =
+        products.series.epochs.iter().map(|e| e.0.to_string()).collect();
     Ok((
-        velocity.data.into_pyarray_bound(py),
-        vel_std.into_pyarray_bound(py),
-        series.data.into_pyarray_bound(py),
-        gamma.into_pyarray_bound(py),
+        products.velocity.data.into_pyarray_bound(py),
+        products.velocity_std.into_pyarray_bound(py),
+        products.series.data.into_pyarray_bound(py),
+        products.temporal_coherence.into_pyarray_bound(py),
         epochs,
     ))
 }
