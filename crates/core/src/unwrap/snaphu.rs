@@ -38,6 +38,11 @@ impl Default for SnaphuConfig {
     }
 }
 
+/// Nombres de archivo (relativos al directorio temporal de la invocación,
+/// ver [`snaphu_config_text`]) para el desenrollado y la coherencia.
+const OUTFILE_NAME: &str = "unwrapped.raw";
+const CORRFILE_NAME: &str = "corr.raw";
+
 static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Directorio temporal único por invocación (PID + contador + `tag`, sin
@@ -75,6 +80,27 @@ fn read_float_raw(path: &Path, rows: usize, cols: usize) -> Result<Array2<f32>> 
     let data: Vec<f32> =
         bytes.chunks_exact(4).map(|c| f32::from_ne_bytes([c[0], c[1], c[2], c[3]])).collect();
     Array2::from_shape_vec((rows, cols), data).map_err(|e| InsarError::DimensionMismatch(e.to_string()))
+}
+
+/// Texto del archivo de config de snaphu. Usa nombres de archivo
+/// **relativos** ([`OUTFILE_NAME`]/[`CORRFILE_NAME`]) — nunca rutas
+/// absolutas — porque el parser de config de snaphu tokeniza por whitespace:
+/// una ruta absoluta con espacios (p. ej. `TMPDIR` con espacios en el nombre
+/// de usuario, o macOS con `/var/folders/...` con un componente inusual) se
+/// trunca en el primer espacio y snaphu escribe en una ruta inesperada o
+/// falla con un error críptico. Los nombres relativos funcionan porque
+/// [`run_snaphu`] invoca el proceso con `current_dir(dir)`. INFILE/LINELENGTH
+/// van como argumentos posicionales del CLI, no en este config — ahí sí es
+/// seguro pasar rutas absolutas porque `Command::arg` no tokeniza por
+/// whitespace (execve recibe cada argumento intacto, sin shell de por medio).
+fn snaphu_config_text(has_corr: bool) -> String {
+    let mut conf = format!(
+        "INFILEFORMAT FLOAT_DATA\nOUTFILE {OUTFILE_NAME}\nOUTFILEFORMAT FLOAT_DATA\nSTATCOSTMODE SMOOTH\n",
+    );
+    if has_corr {
+        conf.push_str(&format!("CORRFILE {CORRFILE_NAME}\nCORRFILEFORMAT FLOAT_DATA\n"));
+    }
+    conf
 }
 
 /// Desenrolla `wrapped` (radianes) invocando `snaphu` como subproceso.
@@ -130,7 +156,7 @@ fn run_snaphu(
     let infile = dir.join("wrapped.raw");
     write_float_raw(&infile, &infile_data)?;
 
-    let corr_path = dir.join("corr.raw");
+    let corr_path = dir.join(CORRFILE_NAME);
     let has_corr = if let Some(q) = quality {
         let masked =
             Array2::from_shape_fn((rows, cols), |(r, c)| if nan_mask[[r, c]] { 0.0 } else { q[[r, c]] });
@@ -140,19 +166,9 @@ fn run_snaphu(
         false
     };
 
-    let outfile = dir.join("unwrapped.raw");
+    let outfile = dir.join(OUTFILE_NAME);
     let conf_path = dir.join("snaphu.conf");
-    // INFILE/LINELENGTH van como argumentos posicionales del CLI (ver
-    // abajo), no en el config: snaphu rechaza tener ambos a la vez
-    // ("multiple input files").
-    let mut conf = format!(
-        "INFILEFORMAT FLOAT_DATA\nOUTFILE {}\nOUTFILEFORMAT FLOAT_DATA\nSTATCOSTMODE SMOOTH\n",
-        outfile.display(),
-    );
-    if has_corr {
-        conf.push_str(&format!("CORRFILE {}\nCORRFILEFORMAT FLOAT_DATA\n", corr_path.display()));
-    }
-    std::fs::write(&conf_path, conf).with_path(&conf_path)?;
+    std::fs::write(&conf_path, snaphu_config_text(has_corr)).with_path(&conf_path)?;
 
     let output = Command::new(&config.binary)
         .arg("-f")
@@ -294,6 +310,35 @@ mod tests {
         let config = SnaphuConfig { binary: "insar-rs-snaphu-no-existe-nunca".into() };
         let err = unwrap_2d_snaphu(&wrapped, None, &config).unwrap_err();
         assert!(matches!(err, InsarError::Io { .. }), "got: {err:?}");
+    }
+
+    /// Regresión A-10: el config de snaphu debe usar nombres de archivo
+    /// relativos, nunca rutas absolutas — el parser de snaphu tokeniza por
+    /// whitespace, así que una ruta con espacios (p. ej. `TMPDIR` con
+    /// espacios en el nombre de usuario) rompía OUTFILE/CORRFILE en silencio.
+    /// No requiere el binario snaphu: solo inspecciona el texto generado.
+    #[test]
+    fn snaphu_config_usa_nombres_relativos_sin_espacios() {
+        for has_corr in [false, true] {
+            let conf = snaphu_config_text(has_corr);
+            // Cada línea debe tener exactamente 2 tokens (clave + valor): si
+            // el valor de OUTFILE/CORRFILE fuera una ruta absoluta con
+            // espacios, esta línea tendría 3+ tokens.
+            for line in conf.lines() {
+                let tokens: Vec<&str> = line.split_whitespace().collect();
+                assert_eq!(tokens.len(), 2, "línea con más de 2 tokens (¿ruta con espacios?): {line:?}");
+            }
+            assert!(conf.contains(&format!("OUTFILE {OUTFILE_NAME}\n")), "conf: {conf}");
+            assert!(
+                !conf.contains('/') && !conf.contains('\\'),
+                "OUTFILE/CORRFILE no deben ser rutas (con separador de directorio): {conf}"
+            );
+            if has_corr {
+                assert!(conf.contains(&format!("CORRFILE {CORRFILE_NAME}\n")), "conf: {conf}");
+            } else {
+                assert!(!conf.contains("CORRFILE"), "conf: {conf}");
+            }
+        }
     }
 
     #[test]
