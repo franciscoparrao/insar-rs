@@ -1221,7 +1221,7 @@ checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 
 [[package]]
 name = "smelt-ml"
-version = "3.1.0"
+version = "3.2.0"
 dependencies = [
  "csv",
  "ndarray",
@@ -1258,7 +1258,7 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "surtgis-core"
-version = "0.18.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "flate2",
