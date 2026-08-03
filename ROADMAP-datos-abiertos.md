@@ -44,7 +44,7 @@ minera/acuífera, inflación volcánica y deslizamientos lentos.
   multiplicador de cobertura.
 - **Esfuerzo:** S (un reader + parseo de metadata de frame).
 
-### P0.2 — Enganche GACOS (corrección troposférica)
+### P0.2 — Enganche GACOS (corrección troposférica) — ✅ HECHO (2026-07-31)
 - **Qué:** mapas de retardo troposférico gratis por fecha/lugar. Reemplaza el
   TODO "corrección atmosférica simple" del PLAN.
 - **Por qué:** convierte la APS de "simple" a publicable sin escribir un modelo
@@ -54,6 +54,11 @@ minera/acuífera, inflación volcánica y deslizamientos lentos.
 - **Plug a insar-rs:** etapa de corrección de fase antes de la inversión de
   series; aplicar sobre stacks Atacama/Maule ya cargados.
 - **Esfuerzo:** S–M (descarga + resampleo al grid del stack + resta de fase).
+- **Implementado:** `troposphere::gacos` + `insar tropo-gacos`. Lector
+  `.ztd`/`.ztd.rsc`, remuestreo bilineal a la grilla del stack, proyección a
+  LOS y doble diferencial (temporal + píxel de referencia). 9 tests + E2E por
+  CLI. La descarga sigue siendo manual desde el portal GACOS (requiere
+  registro); el motor consume los archivos tal como los entrega el servicio.
 
 ### P0.3 — GNSS gratis como referencia absoluta y validación
 - **Qué:** series diarias de miles de estaciones GNSS (incluida Chile).

@@ -20,7 +20,7 @@ Scatterers, con validación numérica contra MintPy.
 | `unwrap_error` | Corrección de saltos 2π por **cierre de fase** (con verificación de efectividad) + QC `nonzero_closure_count` |
 | `inversion` | SBAS OLS / **WLS por coherencia** / **L1 robusto (IRLS)**; **error de DEM** (∝ B⊥); velocidad + SE formal + **bootstrap**; **modelo temporal** (polinomio + estacional + saltos); coherencia temporal; referenciado |
 | `atmosphere` | Filtro APS espacio-temporal (pasa-alto temporal en **tiempo real** — robusto a gaps) |
-| `troposphere` | Corrección estratificada fase-elevación (Doin 2009) |
+| `troposphere` | Corrección estratificada fase-elevación (Doin 2009); **`gacos`** (mapas ZTD, end-to-end) y `era5` (kernel físico) |
 | `postprocess` | Deramp (plano/cuadrática), `coherence_mask`, re-exports de referenciado y γ_temp |
 | `decompose` | LOS → (Up, East) con geometría escalar o **por píxel** (incidencia/heading de `los.rdr`) |
 | `features` | Descriptores por píxel para ML (tabla determinista lista para smelt-ml, con coordenadas para CV espacial) |

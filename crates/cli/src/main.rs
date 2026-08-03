@@ -209,6 +209,37 @@ enum Command {
         #[arg(long, default_value_t = 0)]
         reference_epoch: usize,
     },
+    /// Corrección troposférica con mapas GACOS. A diferencia de 'tropo-era5',
+    /// es operable end-to-end: los .ztd/.ztd.rsc que entrega el servicio se
+    /// leen, remuestrean a la grilla de la serie y proyectan a LOS aquí mismo.
+    /// Preferirlo sobre la corrección topo-correlacionada cuando el objetivo
+    /// científico sea TESTEAR una relación entre la señal y la elevación: el
+    /// ajuste fase-elevación la consume y vuelve circular ese test.
+    TropoGacos {
+        /// Directorio con la serie a corregir (disp_YYYYMMDD.tif)
+        series_dir: PathBuf,
+        /// Directorio con los mapas GACOS (YYYYMMDD.ztd + YYYYMMDD.ztd.rsc)
+        gacos_dir: PathBuf,
+        /// Directorio de salida
+        output: PathBuf,
+        /// Ángulo de incidencia medio en grados (S1 IW ≈ 39). NO se recupera
+        /// de los GeoTIFF de la serie: hay que darlo o la proyección a LOS
+        /// queda mal escalada
+        #[arg(long, default_value_t = 39.0)]
+        incidence_deg: f64,
+        /// Longitud de onda radar en metros
+        #[arg(long, default_value_t = insar_core::types::SENTINEL1_WAVELENGTH_M)]
+        wavelength_m: f64,
+        /// Índice de la época de referencia (0 = primera) a la que ya está
+        /// referenciada la serie
+        #[arg(long, default_value_t = 0)]
+        reference_epoch: usize,
+        /// Píxel de referencia espacial "fila,columna" al que está referenciada
+        /// la serie. Omitirlo deja la corrección sin referenciar en espacio, lo
+        /// que introduce un offset uniforme espurio si la serie SÍ lo está
+        #[arg(long, value_name = "FILA,COL")]
+        reference_pixel: Option<String>,
+    },
     /// SBAS directo desde interferogramas ISCE (.unw ya desenrollados)
     Isce {
         /// Directorio de interferogramas ISCE (subdirs YYYYMMDD_YYYYMMDD)
@@ -474,6 +505,66 @@ fn main() -> anyhow::Result<()> {
             correct_era5_series(&mut series, &delay.data, reference_epoch)?;
             insar_core::io::write_series(&series, &output)?;
             println!("escrito: {}/ (serie corregida por ERA5)", output.display());
+        }
+        Command::TropoGacos {
+            series_dir,
+            gacos_dir,
+            output,
+            incidence_deg,
+            wavelength_m,
+            reference_epoch,
+            reference_pixel,
+        } => {
+            use insar_core::troposphere::gacos::correct_gacos_series;
+            use insar_core::types::StackMeta;
+
+            let refpx = reference_pixel
+                .as_deref()
+                .map(|s| {
+                    let (r, c) = s.split_once(',').ok_or_else(|| {
+                        anyhow::anyhow!("--reference-pixel espera \"FILA,COL\", se recibió {s:?}")
+                    })?;
+                    Ok::<_, anyhow::Error>((r.trim().parse::<usize>()?, c.trim().parse::<usize>()?))
+                })
+                .transpose()?;
+
+            // `read_series` recupera transform y CRS de los GeoTIFF, pero NO la
+            // incidencia: se inyecta aquí porque la proyección a LOS depende de
+            // ella (sec θ ≈ 1.29 a 39°, un 29 % de error si se dejara en 0).
+            let meta = StackMeta {
+                transform: surtgis_core::GeoTransform::default(),
+                crs: None,
+                wavelength_m,
+                incidence_deg,
+                heading_deg: None,
+            };
+            let mut series = insar_core::io::read_series(&series_dir, meta)?;
+            series.meta.incidence_deg = incidence_deg;
+
+            let rep = correct_gacos_series(&mut series, &gacos_dir, reference_epoch, refpx)?;
+            insar_core::io::write_series(&series, &output)?;
+            println!(
+                "escrito: {}/ (serie corregida por GACOS)\n  \
+                 épocas con mapa: {}/{}  ·  cobertura {:.1} %  ·  |corrección| media {:.1} mm",
+                output.display(),
+                rep.epochs_found,
+                series.epochs.len(),
+                rep.coverage * 100.0,
+                rep.mean_abs_correction_m * 1000.0
+            );
+            if !rep.epochs_missing.is_empty() {
+                println!(
+                    "  sin mapa GACOS (quedan SIN corregir): {}",
+                    rep.epochs_missing.join(", ")
+                );
+            }
+            if !rep.epochs_skipped.is_empty() {
+                println!(
+                    "  con mapa pero sin retardo finito en el píxel de referencia \
+                     (quedan SIN corregir): {}",
+                    rep.epochs_skipped.join(", ")
+                );
+            }
         }
         Command::Isce {
             input,

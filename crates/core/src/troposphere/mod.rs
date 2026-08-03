@@ -12,9 +12,25 @@
 //! pendiente fase-elevación, pero solo se resta el término topográfico.
 //!
 //! Ver también [`era5`] (G-7): corrección estratificada por modelo físico
-//! (reanálisis) en vez de esta regresión empírica.
+//! (reanálisis) en vez de esta regresión empírica, y [`gacos`] (P0.2): mapas de
+//! retardo ya modelados y grillados — la única de las tres vías que es operable
+//! end-to-end sin resolver perfiles atmosféricos fuera del motor.
+//!
+//! ## Cuál usar
+//!
+//! | Vía | Resolución | Operable end-to-end | Cuándo |
+//! |---|---|---|---|
+//! | [`correct_topo_correlated`] | la del stack | sí | screening rápido |
+//! | [`gacos`] | ~90 m (0,000833°) | sí | por defecto cuando hay mapas GACOS |
+//! | [`era5`] | ~31 km | no (falta fetch + remuestreo horizontal) | solo si el AOI supera holgadamente una celda ERA5 |
+//!
+//! ⚠️ Si el objetivo científico es **testear** una relación entre la señal y la
+//! elevación, [`correct_topo_correlated`] no sirve como corrección previa: al
+//! ajustar y remover una pendiente fase-elevación global, deja residuos de
+//! signo arbitrario por subregión y vuelve circular ese test. Usar [`gacos`].
 
 pub mod era5;
+pub mod gacos;
 
 use nalgebra::{DMatrix, DVector};
 use ndarray::{Array2, Axis};

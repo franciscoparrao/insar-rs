@@ -5,6 +5,61 @@ versionado: [SemVer](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Corrección troposférica GACOS (P0.2 del roadmap de datos abiertos)
+
+Nuevo módulo `troposphere::gacos` y subcomando `insar tropo-gacos`. Es la
+**primera vía troposférica del motor operable end-to-end**: lee los pares
+`YYYYMMDD.ztd` + `.ztd.rsc` tal como los entrega el servicio GACOS, los
+remuestrea bilinealmente a la grilla de la serie, proyecta a LOS por la secante
+de la incidencia y aplica el diferencial. Sin credenciales, sin dependencias
+nuevas y sin resolver perfiles atmosféricos fuera del motor.
+
+Contraste con `troposphere::era5` (G-7), que mantiene abierto el gap A-9 (no
+descarga ni remuestrea horizontalmente): además de operabilidad, GACOS gana en
+resolución para AOIs chicos — ERA5 tiene celdas de ~31 km, de modo que un AOI de
+~10 km cae dentro de una sola celda y el reanálisis no puede resolver ningún
+gradiente topo-correlacionado *dentro* del AOI; GACOS entrega ZTD a **~90 m**
+(0,000833°, interpolado con SRTM; el paso real siempre se lee del `.rsc`).
+
+La corrección de serie hace **streaming**: carga, remuestrea y libera un mapa a
+la vez — nunca materializa los N mapas simultáneamente (a 90 m, un frame
+continental son cientos de MB por época; el camino ingenuo escala a GBs).
+`load_for_epochs` queda como building block explícitamente marcado con esa
+advertencia. La época de referencia se salta (su corrección es idénticamente 0)
+y las métricas del reporte quedan definidas sobre las épocas no-referencia.
+
+Incluye **referenciado espacial**, que `era5` no hace: una serie InSAR está
+referenciada en tiempo *y* en espacio, así que la corrección aplica el doble
+diferencial `(D[e,p] − D[e₀,p]) − (D[e,p_ref] − D[e₀,p_ref])`. Omitirlo
+introduce un offset uniforme espurio cuando la serie sí fue referenciada a un
+píxel.
+
+Queda documentada además una **trampa metodológica**: si el objetivo científico
+es testear una relación entre la señal y la elevación, `correct_topo_correlated`
+no sirve como corrección previa — al ajustar y remover una pendiente
+fase-elevación global deja residuos de signo arbitrario por subregión y vuelve
+circular ese test. La tabla de "cuál usar" está en el doc del módulo.
+
+**Hardening anti no-op silencioso** (auditoría 2026-08-01): los estados que
+convertían la corrección en un passthrough con exit 0 — época de referencia sin
+mapa GACOS, píxel de referencia fuera de la cobertura, o cero píxeles
+corregidos al terminar — ahora son **errores duros** con mensaje accionable, y
+las épocas con mapa pero sin retardo finito en el píxel de referencia se
+reportan en `GacosReport::epochs_skipped` en vez de saltarse en silencio.
+Verificado end-to-end: los dos gatillos reproducidos contra el binario pasan de
+"escrito: serie corregida (cobertura 0.0 %)" a exit 1.
+
+15 tests unitarios (parseo `.rsc`, binario de tamaño inconsistente, remuestreo
+identidad incluyendo bordes, remuestreo grueso→fino exacto en campo lineal —el
+camino de producción—, no-extrapolación fuera de cobertura, diferencial
+temporal, referenciado espacial, época faltante, única época corregible sin
+mapa, directorio vacío, proyección a LOS, y los 4 del hardening: referencia sin
+mapa, refpixel fuera de cobertura, época saltada reportada, serie toda-NaN) más
+verificación end-to-end por CLI
+sobre una serie sintética con retardo espurio en columna: recupera la
+deformación verdadera exacta (−10,00 y −20,00 mm) y anula el gradiente espurio
+(49,33 mm → 0,000 mm).
+
 ## [0.2.0] — 2026-07-17
 
 Primer release publicado a crates.io/PyPI. Reúne el trabajo del backlog v0.2
