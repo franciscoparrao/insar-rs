@@ -1,0 +1,38 @@
+cff-version: 1.2.0
+title: "insar-rs: A native Rust engine for InSAR time-series ground deformation (PS-InSAR + SBAS)"
+message: "If you use this software, please cite it using the metadata below."
+type: software
+authors:
+  - given-names: Francisco
+    family-names: Parra
+    email: francisco.parra.o@usach.cl
+    affiliation: "Departamento de Ingeniería Informática, Universidad de Santiago de Chile, Santiago, Chile"
+    orcid: "https://orcid.org/0009-0006-0435-1854"
+repository-code: "https://github.com/franciscoparrao/insar-rs"
+doi: "10.5281/zenodo.21924287"
+identifiers:
+  - type: doi
+    value: "10.5281/zenodo.21924287"
+    description: "Concept DOI (all versions)"
+  - type: doi
+    value: "10.5281/zenodo.21924288"
+    description: "Version DOI (v0.2.0)"
+abstract: >-
+  A native Rust engine for InSAR time-series analysis of ground deformation
+  from Sentinel-1 data (PS-InSAR and Small-Baseline Subset), with a native
+  ISCE reader, quality-guided and SNAPHU unwrapping, robust SBAS inversion
+  (OLS/WLS/L1-IRLS) with DEM-error estimation, GACOS/ERA5 tropospheric
+  correction, LOS decomposition and per-pixel ML features. Certified numerical
+  parity with MintPy on the Fernandina Sentinel-1 stack (r = 1.000000).
+  Consumable as a Rust library, CLI, and Python bindings (insar-rs on PyPI).
+keywords:
+  - InSAR
+  - SAR interferometry
+  - ground deformation
+  - SBAS
+  - persistent scatterers
+  - Sentinel-1
+  - remote sensing
+  - Rust
+license: MIT
+version: v0.2.0
