@@ -1,0 +1,37 @@
+{
+  "title": "insar-rs: A native Rust engine for InSAR time-series ground deformation (PS-InSAR + SBAS)",
+  "description": "A native Rust engine for InSAR time-series analysis of ground deformation from Sentinel-1 data, covering Persistent Scatterers (PS-InSAR) and Small-Baseline Subset (SBAS). The field is dominated by Python/MATLAB stacks (ISCE, StaMPS, MintPy, EZ-InSAR); insar-rs provides a dependency-light, parallel (Rayon) native engine consumable as a library, CLI (insar), and Python bindings (insar-rs on PyPI). insar-core spans 14 modules: own in-memory stack I/O plus a native ISCE reader (VRT + raw, mmap), PS selection, small-baseline network design, quality-guided 2D phase unwrapping (with an optional SNAPHU backend), phase-closure unwrap-error correction, SBAS inversion (OLS / coherence-weighted WLS / robust L1-IRLS) with DEM-error estimation, formal velocity uncertainty and bootstrap, stratified and GACOS/ERA5 tropospheric correction, deramping, LOS-to-vertical/east decomposition, per-pixel ML features, and an end-to-end run_sbas pipeline. Raster I/O uses the sibling SurtGIS native GeoTIFF writer (no GDAL). Numerical parity with MintPy is certified on the Fernandina Sentinel-1 stack: displacement-series RMSE 0.0029 mm, velocity RMSE 0.0070 mm/yr, r = 1.000000. This deposit archives the v0.2.0 release (published to crates.io as insar-core and to PyPI as insar-rs).",
+  "creators": [
+    {
+      "name": "Parra, Francisco",
+      "affiliation": "Department of Informatics Engineering, Universidad de Santiago de Chile (USACH)",
+      "orcid": "0009-0006-0435-1854"
+    }
+  ],
+  "keywords": [
+    "InSAR",
+    "SAR interferometry",
+    "ground deformation",
+    "SBAS",
+    "persistent scatterers",
+    "time-series analysis",
+    "Sentinel-1",
+    "remote sensing",
+    "geodesy",
+    "Rust",
+    "reproducibility"
+  ],
+  "license": "MIT",
+  "upload_type": "software",
+  "access_right": "open",
+  "language": "eng",
+  "version": "v0.2.0",
+  "communities": [],
+  "related_identifiers": [
+    {
+      "identifier": "10.5281/zenodo.21924287",
+      "relation": "isVersionOf",
+      "scheme": "doi"
+    }
+  ]
+}

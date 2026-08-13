@@ -67,6 +67,32 @@ maturin develop -m crates/python/Cargo.toml
 pytest crates/python/tests/
 ```
 
+## Reproducibilidad y cita
+
+Release **v0.2.0** publicado en los registries oficiales:
+
+```bash
+# Rust (motor): https://crates.io/crates/insar-core
+cargo add insar-core
+
+# Python (bindings): https://pypi.org/project/insar-rs/
+pip install insar-rs
+```
+
+La validación es reproducible: el ejemplo `validate_fernandina` recompone la
+paridad con MintPy (serie RMSE 0.0029 mm, velocidad 0.0070 mm/año,
+r = 1.000000) sobre el stack público de Fernandina; metodología en
+[`docs/validation.md`](docs/validation.md).
+
+Copia archivada con DOI en Zenodo:
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21924287.svg)](https://doi.org/10.5281/zenodo.21924287)
+
+- **Concept DOI** (todas las versiones, citar este): [`10.5281/zenodo.21924287`](https://doi.org/10.5281/zenodo.21924287)
+- **Version DOI** (v0.2.0): [`10.5281/zenodo.21924288`](https://doi.org/10.5281/zenodo.21924288)
+
+Para citar, ver [`CITATION.cff`](CITATION.cff) (badge "Cite this repository" de
+GitHub) o la metadata en [`.zenodo.json`](.zenodo.json).
+
 ## Licencia
 
 MIT OR Apache-2.0 (ver `LICENSE-MIT` / `LICENSE-APACHE`).
