@@ -1,6 +1,7 @@
-//! Pipeline SBAS end-to-end: lectura → (PS opcional) → desenrollado →
-//! corrección de cierre → referenciado → inversión (OLS/WLS ± error de DEM) →
-//! corrección APS → deramp → velocidad → escritura de productos.
+//! Pipeline SBAS end-to-end: lectura → (PS opcional) → corrección de phase
+//! bias → desenrollado → corrección de cierre → referenciado → inversión
+//! (OLS/WLS ± error de DEM) → corrección APS → deramp → velocidad →
+//! escritura de productos.
 //!
 //! ## Flujo de [`run_sbas`] (orden físico del procesamiento)
 //!
@@ -9,26 +10,31 @@
 //! 2. Si hay `ps_threshold`, lee amplitudes del mismo directorio, calcula
 //!    amplitude dispersion y selecciona PS; sin umbral se invierte toda la
 //!    grilla (modo SBAS clásico).
-//! 3. Desenrolla la fase de cada par con el backend configurado
+//! 3. Corrige el sesgo de fase de no-cierre sobre la fase **envuelta**
+//!    (`phase_bias::correct_phase_bias`, si `phase_bias`). Va antes de
+//!    desenrollar: el sesgo perturba la fase envuelta, así que corregirlo
+//!    después obligaría a re-desenrollar. Es un problema distinto del paso
+//!    5 — fraccional vs salto entero de 2π (ver [`crate::phase_bias`]).
+//! 4. Desenrolla la fase de cada par con el backend configurado
 //!    ([`SbasPipelineConfig::unwrap_backend`]): flood-fill propio
 //!    (`unwrap::unwrap_stack_min_quality`, default, con el umbral opcional
 //!    [`SbasPipelineConfig::unwrap_min_quality`]) o SNAPHU externo
 //!    (`unwrap::snaphu::unwrap_stack_snaphu`, requiere el binario `snaphu`).
 //!    En ambos casos la coherencia se usa como mapa de calidad.
-//! 4. Corrige errores de desenrollado por cierre de fase
+//! 5. Corrige errores de desenrollado por cierre de fase
 //!    (`unwrap_error::correct_unwrap_errors`, si `correct_unwrap`) y computa
 //!    el QC de cierres residuales (`unwrap_error::nonzero_closure_count`).
-//! 5. Referencia espacialmente el stack (`inversion::reference_to_pixel`):
+//! 6. Referencia espacialmente el stack (`inversion::reference_to_pixel`):
 //!    al píxel configurado, o al de máxima coherencia media si hay
 //!    coherencia; sin coherencia ni configuración, no se referencia.
-//! 6. Invierte la serie LOS (`inversion::invert_sbas_ext`): pesos WLS por
+//! 7. Invierte la serie LOS (`inversion::invert_sbas_ext`): pesos WLS por
 //!    coherencia y/o estimación de error de DEM según
 //!    [`SbasPipelineConfig::solver`].
-//! 7. Corrige APS turbulento (`atmosphere::correct_aps`) — ver regla de
+//! 8. Corrige APS turbulento (`atmosphere::correct_aps`) — ver regla de
 //!    salto abajo.
-//! 8. Deramp por época (`postprocess::deramp_series`, si `deramp`).
-//! 9. Estima la velocidad media LOS y la coherencia temporal; escribe los
-//!    productos en `output_dir`.
+//! 9. Deramp por época (`postprocess::deramp_series`, si `deramp`).
+//! 10. Estima la velocidad media LOS y la coherencia temporal; escribe los
+//!     productos en `output_dir`.
 //!
 //! ## Orden troposfera estratificada vs APS turbulento
 //!
@@ -62,10 +68,11 @@ use crate::error::{InsarError, IoResultExt, Result};
 use crate::inversion::{SbasSolverConfig, WeightScheme};
 use crate::io::isce::IsceLoadConfig;
 use crate::network::SbasConfig;
+use crate::phase_bias::{PhaseBiasConfig, PhaseBiasReport};
 use crate::postprocess::RampKind;
 use crate::types::{DisplacementSeries, PsCandidate, VelocityMap};
 use crate::unwrap_error::UnwrapCorrectionReport;
-use crate::{inversion, io, postprocess, ps, unwrap, unwrap_error};
+use crate::{inversion, io, phase_bias, postprocess, ps, unwrap, unwrap_error};
 
 /// Construye la máscara booleana para restringir la auto-selección de
 /// referencia (`inversion::select_reference_pixel`) a
@@ -89,7 +96,7 @@ fn reference_region_mask(
     })
 }
 
-/// Backend de desenrollado 2D usado por [`run_sbas`] (paso 3).
+/// Backend de desenrollado 2D usado por [`run_sbas`] (paso 4).
 #[derive(Debug, Clone, Default)]
 pub enum UnwrapBackend {
     /// Flood-fill quality-guided propio (ver [`unwrap`]) — default, sin
@@ -123,6 +130,16 @@ pub struct SbasPipelineConfig {
     /// Corregir errores de desenrollado por cierre de fase antes de invertir
     /// (default `true`; es no-op verificado en stacks sin cierres ≠ 0).
     pub correct_unwrap: bool,
+    /// Corregir el sesgo de fase de no-cierre (*phase bias*) sobre los
+    /// interferogramas **envueltos**, antes de desenrollar
+    /// ([`crate::phase_bias`]). `None` = no corregir (default).
+    ///
+    /// Va antes del desenrollado porque el sesgo es una perturbación de la
+    /// fase envuelta: corregirlo después obligaría a re-desenrollar. No
+    /// confundir con `correct_unwrap`, que actúa **después** y sobre saltos
+    /// enteros de 2π — son problemas ortogonales (ver doc de
+    /// [`crate::phase_bias`]).
+    pub phase_bias: Option<PhaseBiasConfig>,
     /// Píxel de referencia (fila, col). `None` = automático: máxima
     /// coherencia media si hay coherencia; sin referenciar si no la hay.
     pub reference: Option<(usize, usize)>,
@@ -153,6 +170,7 @@ impl SbasPipelineConfig {
             unwrap_min_quality: None,
             unwrap_backend: UnwrapBackend::default(),
             correct_unwrap: true,
+            phase_bias: None,
             reference: None,
             reference_region: None,
             solver: SbasSolverConfig::default(),
@@ -172,6 +190,8 @@ pub struct SbasProducts {
     pub dem_error_m: Option<Array2<f32>>,
     /// Reporte de la corrección de cierre, si `correct_unwrap`.
     pub unwrap_report: Option<UnwrapCorrectionReport>,
+    /// Reporte de la corrección de phase bias, si `phase_bias` se configuró.
+    pub phase_bias_report: Option<PhaseBiasReport>,
     /// Número de pares (de `n_pairs` totales) que quedaron completamente en
     /// NaN por no tener fase finita en el píxel de referencia elegido — ver
     /// [`inversion::reference_to_pixel`]. `0` si no se referenció el stack.
@@ -219,7 +239,7 @@ fn select_ps_from_dir(input_dir: &std::path::Path, threshold: f32) -> Result<Vec
 /// se aplica vía API).
 pub fn run_sbas(config: &SbasPipelineConfig) -> Result<SbasProducts> {
     // 1) Stack de interferogramas envueltos + coherencia opcional.
-    let stack = io::read_ifg_stack(&config.input_dir)?;
+    let mut stack = io::read_ifg_stack(&config.input_dir)?;
     let coherence = io::read_coherence_stack(&config.input_dir)?;
     if let Some(coh) = &coherence
         && coh.dim() != stack.data.dim()
@@ -234,6 +254,14 @@ pub fn run_sbas(config: &SbasPipelineConfig) -> Result<SbasProducts> {
     // 2) Selección de PS (opcional).
     let ps_candidates = match config.ps_threshold {
         Some(threshold) => Some(select_ps_from_dir(&config.input_dir, threshold)?),
+        None => None,
+    };
+
+    // 3) Sesgo de fase de no-cierre, sobre la fase ENVUELTA. Tiene que ir
+    //     aquí: es una perturbación de la fase envuelta, así que corregirlo
+    //     después del desenrollado obligaría a re-desenrollar.
+    let phase_bias_report = match &config.phase_bias {
+        Some(pb_config) => Some(phase_bias::correct_phase_bias(&mut stack, pb_config)?),
         None => None,
     };
 
@@ -324,6 +352,7 @@ pub fn run_sbas(config: &SbasPipelineConfig) -> Result<SbasProducts> {
         temporal_coherence: gamma,
         dem_error_m: solution.dem_error_m,
         unwrap_report,
+        phase_bias_report,
         pairs_lost_by_reference,
     })
 }

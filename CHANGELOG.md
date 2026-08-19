@@ -5,6 +5,91 @@ versionado: [SemVer](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Corrección de phase bias (sesgo de fase de no-cierre)
+
+Nuevo módulo `phase_bias` e integración como paso 3 de `run_sbas`
+(`SbasPipelineConfig::phase_bias`, `SbasProducts::phase_bias_report`).
+Implementa la corrección empírica de Maghsoudi et al. (2022), RSE 275:113022
+(Eqs. 2–13) **dentro del pipeline nativo**, no como post-proceso externo.
+
+Corrige el sesgo sistemático que el multilooking introduce en los
+interferogramas cortos (la *fading signal*): mayor cuanto más corto el par y
+más decorrelaciona el terreno, y que en una cadena SBAS se acumula hasta
+producir velocidades sesgadas — imita subsidencia en cultivo y bosque.
+
+**No es lo que hacía `unwrap_error`**, y conviene que quede escrito porque los
+dos módulos usan la misma palabra "cierre": `unwrap_error` resuelve saltos
+**enteros** de 2π (Yunjun et al. 2019) sobre fase desenrollada; `phase_bias`
+resuelve la parte **fraccional** del cierre —justo lo que el otro redondea a
+cero y descarta— sobre fase **envuelta**. Son ortogonales y van en puntos
+distintos del pipeline: phase bias antes de desenrollar (es una perturbación
+de la fase envuelta; corregirlo después obligaría a re-desenrollar), errores de
+desenrollado después. El doc del módulo lleva la tabla comparativa.
+
+Que la estimación trabaje sobre fase envuelta —cierres calculados como
+argumento del producto complejo, no restando fases desenrolladas— es lo que
+hace la corrección barata: no necesita desenrollar, ni *phase linking*, ni
+interferogramas largos coherentes salvo un ancla para los coeficientes.
+
+Generalizaciones sobre el paper, que está escrito para muestreo regular de
+6 días y span máximo 3:
+
+- **Span arbitrario `M`** indexado por **orden de época**, no por días de
+  calendario. Es la generalización correcta a muestreo irregular y coincide con
+  lo que el paper hace de facto ("interferograms that connect each epoch i to
+  the three or four nearest acquisitions in time"). La fila del diseño lleva
+  `(aₙ−1)` en las n columnas de la cadena, que recupera la Eq. (10) para M=3.
+- **Coeficientes estimados de los datos** (`estimate_coefficients`) en vez de
+  reusar los 0,47 / 0,31 publicados: el paper muestra que dependen de la
+  cobertura del suelo, así que son específicos de escena. Se estiman como
+  **cociente de acumulados** y no como media de los cocientes por píxel que
+  calcula el paper — los mapas por píxel son ruidosos (el propio paper lo dice,
+  Fig. 8) y su cociente explota donde el denominador cruza cero, así que la
+  media muestral no es estimador estable de la razón.
+- **Red incompleta**: un par unitario faltante no solo elimina su incógnita,
+  invalida toda observación que lo cruce (la Eq. 2 necesita su fase para formar
+  el cierre). La topología lo maneja explícitamente.
+
+Productos adicionales: `closure_rms` (QC antes/después), `cumulative_bias`
+(firma temporal del sesgo, Fig. 4 del paper) y `high_closure_mask`.
+
+**Hardening anti no-op silencioso**, siguiendo la doctrina de GACOS. Son
+errores duros, no reportes que nadie mira:
+
+- `max_span = 2` **nunca** determina el sistema: N−2 observaciones para N−1
+  incógnitas, sea cual sea N. Hacen falta dos longitudes de par largo distintas
+  (spans 2 y 3) para cerrarlo. Sin este chequeo, una red de solo consecutivos y
+  saltos de 2 devolvía éxito con el stack intacto.
+- Cero píxeles corregidos al terminar.
+- Escena sin sesgo medible: el denominador de las Eqs. 8–9 es el sesgo
+  acumulado, y si es ~0 los coeficientes son un cociente de ruidos. El umbral
+  es por píxel y en radianes — compararlo contra una escala derivada de las
+  propias sumas sería circular, porque el denominador suele ser la mayor de
+  ellas y la prueba pasaría siempre.
+- Coeficiente fuera de rango físico (el modelo dice que el sesgo decae con el
+  largo del par: 0 < aₙ < 1).
+- Sin par ancla teselable para estimar coeficientes.
+
+Píxeles cuyo sistema reducido queda rank-deficiente se dejan **intactos** y se
+cuentan en `pixels_skipped`: no se les aplica la solución de norma mínima, que
+repartiría el cierre en fracciones arbitrarias entre incógnitas que las
+observaciones no restringen.
+
+15 tests unitarios (topología y observaciones 2N−5, par unitario faltante,
+recuperación exacta de los coeficientes verdaderos, escena sin sesgo, sin
+ancla, recuperación del sesgo inyectado dejando la deformación intacta, caída
+del RMS de cierre, stack sin sesgo no se toca, píxel inválido intacto,
+preservación de la amplitud —la corrección es una rotación compleja—, red de
+span 2 indeterminada, sesgo acumulado, máscara de cierre alto) más un test
+**end-to-end del pipeline** (`tests/phase_bias_e2e.rs`) que es la prueba del
+argumento: sobre un stack sintético de 10 épocas con sesgo de 0,15 rad por par
+de 12 días, la velocidad sale sesgada en **8,6 mm/año** (43 % de la señal
+verdadera de −20 mm/año) y la corrección la devuelve a 0,00 mm/año de error,
+con el RMS de cierre cayendo de 0,242 a 1,1e−8 rad.
+
+Limitación conocida: el camino `run_sbas_isce` lee `.unw` ya desenrollados, así
+que la corrección **no aplica** ahí — requiere fase envuelta.
+
 ### Corrección troposférica GACOS (P0.2 del roadmap de datos abiertos)
 
 Nuevo módulo `troposphere::gacos` y subcomando `insar tropo-gacos`. Es la
