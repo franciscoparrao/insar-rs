@@ -52,6 +52,7 @@
 //! v0.1 — ver PLAN.md.
 
 pub mod isce;
+pub mod licsar;
 
 use std::fs;
 use std::path::{Path, PathBuf};
