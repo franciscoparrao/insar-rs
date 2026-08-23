@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use chrono::NaiveDate;
+use ndarray::Array3;
 use num_complex::Complex32;
 use surtgis_core::io::read_geotiff;
 
@@ -105,37 +106,9 @@ impl Default for LicsarLoadConfig {
 /// dimensiones. Los pares se ordenan por (referencia, secundaria).
 pub fn read_licsar_stack(dir: &Path, config: &LicsarLoadConfig) -> Result<IfgStack> {
     // 1. Descubrir pares con el producto pedido.
-    let mut found: Vec<(NaiveDate, NaiveDate, PathBuf)> = Vec::new();
-    for entry in std::fs::read_dir(dir).map_err(|e| InsarError::io(dir, e))? {
-        let entry = entry.map_err(|e| InsarError::io(dir, e))?;
-        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-            continue;
-        }
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        let Some((a, b)) = parse_pair_name(&name) else {
-            continue;
-        };
-        if let Some((start, end)) = config.date_range
-            && (a < start || b > end)
-        {
-            continue;
-        }
-        let tif = entry.path().join(format!("{name}.{}", config.product.suffix()));
-        if tif.is_file() {
-            found.push((a, b, tif));
-        }
-    }
-    if found.is_empty() {
-        return Err(InsarError::Metadata(format!(
-            "{}: sin pares LiCSAR con {} (se esperan subdirs YYYYMMDD_YYYYMMDD/)",
-            dir.display(),
-            config.product.suffix()
-        )));
-    }
+    let found = discover_pairs(dir, config)?;
 
-    // 2. Orden estable por (referencia, secundaria) e índice de épocas.
-    found.sort_by_key(|(a, b, _)| (*a, *b));
+    // 2. Índice de épocas (found ya viene ordenado por (ref, sec)).
     let mut dates: Vec<NaiveDate> = found.iter().flat_map(|(a, b, _)| [*a, *b]).collect();
     dates.sort_unstable();
     dates.dedup();
@@ -240,6 +213,83 @@ pub fn read_licsar_stack(dir: &Path, config: &LicsarLoadConfig) -> Result<IfgSta
     };
     stack.validate()?;
     Ok(stack)
+}
+
+/// Descubre los pares (subdirs `YYYYMMDD_YYYYMMDD/`) con el producto de fase
+/// pedido, aplica el filtro de fechas y los ordena por (referencia, secundaria).
+fn discover_pairs(
+    dir: &Path,
+    config: &LicsarLoadConfig,
+) -> Result<Vec<(NaiveDate, NaiveDate, PathBuf)>> {
+    let mut found: Vec<(NaiveDate, NaiveDate, PathBuf)> = Vec::new();
+    for entry in std::fs::read_dir(dir).map_err(|e| InsarError::io(dir, e))? {
+        let entry = entry.map_err(|e| InsarError::io(dir, e))?;
+        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let Some((a, b)) = parse_pair_name(&name) else {
+            continue;
+        };
+        if let Some((start, end)) = config.date_range
+            && (a < start || b > end)
+        {
+            continue;
+        }
+        let tif = entry.path().join(format!("{name}.{}", config.product.suffix()));
+        if tif.is_file() {
+            found.push((a, b, tif));
+        }
+    }
+    if found.is_empty() {
+        return Err(InsarError::Metadata(format!(
+            "{}: sin pares LiCSAR con {} (se esperan subdirs YYYYMMDD_YYYYMMDD/)",
+            dir.display(),
+            config.product.suffix()
+        )));
+    }
+    found.sort_by_key(|(a, b, _)| (*a, *b));
+    Ok(found)
+}
+
+/// Lee la coherencia (`geo.cc.tif`, Byte 0–255) de los mismos pares que
+/// [`read_licsar_stack`], en el MISMO orden y con el MISMO recorte AOI, como
+/// `Array3<f32>` (coherencia = valor/255; NoData 0 → NaN). Queda alineada capa
+/// a capa con el `IfgStack` — pensada para pasarla como calidad a
+/// [`crate::unwrap::unwrap_stack_min_quality`].
+pub fn read_licsar_coherence(dir: &Path, config: &LicsarLoadConfig) -> Result<Array3<f32>> {
+    let found = discover_pairs(dir, config)?;
+    let mut window: Option<(usize, usize, usize, usize)> = None;
+    accumulate_layers(found.len(), |i, expected| {
+        let (a, b, tif) = &found[i];
+        let cc_path = tif.with_file_name(format!(
+            "{}_{}.geo.cc.tif",
+            a.format("%Y%m%d"),
+            b.format("%Y%m%d")
+        ));
+        let cc = read_geotiff::<u8, _>(&cc_path, None)
+            .map_err(|e| InsarError::Raster(format!("{}: {e}", cc_path.display())))?;
+        let (full_rows, full_cols) = cc.shape();
+        if window.is_none() {
+            window = Some(match config.aoi {
+                Some(aoi) => crop_window(cc.transform(), &aoi, full_rows, full_cols)?,
+                None => (0, full_rows, 0, full_cols),
+            });
+        }
+        let (r0, r1, c0, c1) = window.unwrap();
+        let (out_rows, out_cols) = (r1 - r0, c1 - c0);
+        check_dims(&cc_path, (out_rows, out_cols), expected.unwrap_or((out_rows, out_cols)))?;
+        let arr = cc.data();
+        let mut vals = Vec::with_capacity(out_rows * out_cols);
+        for r in r0..r1 {
+            for c in c0..c1 {
+                let v = arr[[r, c]];
+                vals.push(if v == 0 { f32::NAN } else { v as f32 / 255.0 });
+            }
+        }
+        Ok(((out_rows, out_cols), vals))
+    })
 }
 
 /// Parsea `YYYYMMDD_YYYYMMDD` → (referencia, secundaria). `None` si el nombre
