@@ -45,6 +45,41 @@ Dos lecturas para el paper:
    tienen patrón espacial); lo que varía espacialmente es la magnitud del
    sesgo, no la fracción corregible por este modelo.
 
+## Figuras F2 (paridad) y F3 (sintético) — añadidas 2026-08-29
+
+**F2 `figs/fig_parity.pdf`** — paridad numérica vs MintPy (Fernandina, 98
+épocas, 288 ifgs, 270 k px, mismo píxel de referencia 76/156 a ambos lados):
+
+- Serie temporal: RMSE **0.0005 mm**, r = 1.000000 (26.5 M comparaciones);
+  P99.9 |Δ| = 0.16 µm.
+- Velocidad: RMSE **5.3 µm/año**, r = 1.000000.
+
+Cadena de regeneración (los intermedios pesados no se conservan):
+```bash
+source .venv-mintpy/bin/activate
+cd data/FernandinaSenDT128/mintpy
+smallbaselineApp.py smallbaselineApp.cfg --dostep load_data
+smallbaselineApp.py smallbaselineApp.cfg --dostep reference_point
+ifgram_inversion.py inputs/ifgramStack.h5 -w no
+timeseries2velocity.py timeseries.h5 -o ../../../validation/export/velocity_ref.h5
+cd ../../..
+python3 validation/export_ifgstack.py data/FernandinaSenDT128/mintpy/inputs/ifgramStack.h5 --out validation/export
+cargo run --release --example validate_fernandina -- validation/export
+python3 validation/make_figure_parity.py
+```
+Nota: si `reference_point` elige otro píxel, la figura sigue siendo válida —
+ambos lados se referencian al REF_Y/REF_X del timeseries.h5. La velocidad de
+MintPy debe regenerarse con `timeseries2velocity` para compartir referencia
+(el `velocity.h5` histórico usa la referencia antigua y mete un offset).
+
+**F3 `figs/fig_synthetic.pdf`** — sintético con ground truth (misma
+construcción que `tests/phase_bias_e2e.rs`): verdad −20 mm/año, sesgada
+−28.4 (error 8.4 mm/año, 42 %), corregida −20.00; cierre 0.242 → 1.1e−8 rad.
+```bash
+cargo run --release --example phase_bias_synthetic_figs
+python3 validation/make_figure_synthetic.py
+```
+
 ## Archivos
 
 - `figs/fig_closure.pdf` — figura de publicación (a: RMS antes, b: después,
