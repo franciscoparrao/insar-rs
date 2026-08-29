@@ -342,7 +342,7 @@ mod tests {
         std::fs::create_dir_all(&d).unwrap();
         let mut r = Raster::from_vec(phase.to_vec(), rows, cols).unwrap();
         r.set_transform(GeoTransform::new(-72.0, -34.0, 0.001, -0.001));
-        write_geotiff(&r, &d.join(format!("{pair}.geo.diff_unfiltered_pha.tif")), None).unwrap();
+        write_geotiff(&r, d.join(format!("{pair}.geo.diff_unfiltered_pha.tif")), None).unwrap();
     }
 
     #[test]

@@ -360,6 +360,50 @@ pub fn closure_rms(stack: &IfgStack, max_span: usize) -> Result<(f64, usize)> {
     Ok(((sum_sq / count as f64).sqrt(), count))
 }
 
+/// Mapa por píxel del RMS de la fase de cierre hasta `max_span`, en radianes,
+/// más el nº de cierres que entró en cada píxel.
+///
+/// Es [`closure_rms`] desagregado espacialmente: el estadístico global es la
+/// media cuadrática de este mapa ponderada por el conteo. Calculado antes y
+/// después de [`correct_phase_bias`] muestra **dónde** muerde el sesgo
+/// (cultivo/bosque decorrelacionado vs urbano coherente) sin pasar por el
+/// desenrollado. NaN donde ningún cierre fue evaluable.
+pub fn closure_rms_map(
+    stack: &IfgStack,
+    max_span: usize,
+) -> Result<(Array2<f32>, Array2<u32>)> {
+    stack.validate()?;
+    check_span(max_span)?;
+    let topo = ClosureTopology::build(stack, max_span);
+    let (n_rows, n_cols) = stack.dims();
+    let data = stack.data.view();
+
+    let mut rms = Array2::<f32>::from_elem((n_rows, n_cols), f32::NAN);
+    let mut count = Array2::<u32>::zeros((n_rows, n_cols));
+    let mut rms_rows: Vec<_> = rms.axis_iter_mut(Axis(0)).collect();
+    let mut count_rows: Vec<_> = count.axis_iter_mut(Axis(0)).collect();
+    rms_rows
+        .par_iter_mut()
+        .zip(count_rows.par_iter_mut())
+        .enumerate()
+        .for_each(|(r, (rms_row, count_row))| {
+            for c in 0..n_cols {
+                let (mut sum_sq, mut n) = (0.0_f64, 0u32);
+                for ob in &topo.obs {
+                    if let Some(v) = closure_at(ob, |k| data[[k, r, c]]) {
+                        sum_sq += v * v;
+                        n += 1;
+                    }
+                }
+                if n > 0 {
+                    rms_row[c] = (sum_sq / n as f64).sqrt() as f32;
+                    count_row[c] = n;
+                }
+            }
+        });
+    Ok((rms, count))
+}
+
 /// Estima los coeficientes `a₂..a_M` de los datos (Eqs. 8–9 del paper).
 ///
 /// Elige como **ancla** los pares cuyo lapso se acerca a `anchor_days` y que
@@ -1125,6 +1169,56 @@ mod tests {
             rep.closure_rms_after
         );
         assert!(rep.closure_rms_after < 1e-4, "modelo exacto: residuo ≈ 0");
+    }
+
+    #[test]
+    fn el_mapa_de_cierre_es_consistente_con_el_global() {
+        // El RMS global es la media cuadrática del mapa ponderada por conteo;
+        // y en un stack sintético espacialmente uniforme cada píxel debe dar
+        // el mismo RMS que el global.
+        let n = 10;
+        let a_true = vec![0.5, 0.3];
+        let bias: Vec<f64> = (0..n - 1).map(|i| 0.04 * ((i % 3) as f64 + 1.0)).collect();
+        let def: Vec<f64> = (0..n).map(|e| 0.02 * e as f64).collect();
+        let stack = synth(n, 3, &def, &bias, &a_true, 3, 4);
+
+        let (global, n_global) = closure_rms(&stack, 3).unwrap();
+        let (map, count) = closure_rms_map(&stack, 3).unwrap();
+
+        let mut sum_sq = 0.0_f64;
+        let mut total = 0usize;
+        for (v, &c) in map.iter().zip(count.iter()) {
+            if c > 0 {
+                sum_sq += (*v as f64).powi(2) * c as f64;
+                total += c as usize;
+            }
+            assert!((*v as f64 - global).abs() < 1e-5, "stack uniforme: {v} vs {global}");
+        }
+        assert_eq!(total, n_global, "mismo nº de observaciones que el global");
+        // Tolerancia de f32: el mapa redondea cada RMS a f32 antes de agregar.
+        assert!(
+            ((sum_sq / total as f64).sqrt() - global).abs() < 1e-5,
+            "la agregación del mapa reproduce el RMS global: {} vs {global}",
+            (sum_sq / total as f64).sqrt()
+        );
+    }
+
+    #[test]
+    fn el_mapa_de_cierre_marca_nan_sin_observaciones() {
+        // Un píxel con fase inválida en todas las capas no tiene cierres:
+        // RMS NaN y conteo 0.
+        let n = 8;
+        let bias: Vec<f64> = vec![0.03; n - 1];
+        let def: Vec<f64> = (0..n).map(|e| 0.05 * e as f64).collect();
+        let mut stack = synth(n, 3, &def, &bias, &[0.47, 0.31], 2, 2);
+        for k in 0..stack.n_layers() {
+            stack.data[[k, 0, 0]] = Complex32::new(f32::NAN, f32::NAN);
+        }
+        let (map, count) = closure_rms_map(&stack, 3).unwrap();
+        assert!(map[[0, 0]].is_nan());
+        assert_eq!(count[[0, 0]], 0);
+        assert!(map[[1, 1]].is_finite());
+        assert!(count[[1, 1]] > 0);
     }
 
     #[test]
