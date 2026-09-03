@@ -56,38 +56,40 @@ fn corrected_reduction(
     Ok(reduction(before, after))
 }
 
-/// Media del bloque B×B del píxel, excluyendo el píxel mismo (donut). NaN si
-/// el bloque no aporta ningún vecino válido.
-fn donut_block_mean(d: &Array3<f32>) -> Array3<f32> {
+/// Media del bloque `block`×`block` del píxel, excluyendo la vecindad de
+/// Chebyshev ≤ `guard` en torno al píxel (guard 0 = solo el píxel mismo:
+/// donut clásico). NaN si el bloque no aporta ningún vecino válido. El
+/// `guard` cierra la fuga por correlación espacial del ruido (B1 del blind):
+/// el remuestreo del geocoding correlaciona vecinos inmediatos.
+fn donut_block_mean(d: &Array3<f32>, block: usize, guard: usize) -> Array3<f32> {
     let (n_slots, rows, cols) = d.dim();
     let mut out = Array3::<f32>::from_elem(d.dim(), f32::NAN);
+    let g = guard as isize;
     for s in 0..n_slots {
         let plane = d.index_axis(Axis(0), s);
         let mut oplane = out.index_axis_mut(Axis(0), s);
-        for br in (0..rows).step_by(BLOCK) {
-            for bc in (0..cols).step_by(BLOCK) {
-                let (r1, c1) = ((br + BLOCK).min(rows), (bc + BLOCK).min(cols));
-                let (mut sum, mut n) = (0.0f64, 0u32);
+        for br in (0..rows).step_by(block) {
+            for bc in (0..cols).step_by(block) {
+                let (r1, c1) = ((br + block).min(rows), (bc + block).min(cols));
                 for r in br..r1 {
                     for c in bc..c1 {
-                        let v = plane[[r, c]];
-                        if v.is_finite() {
-                            sum += v as f64;
-                            n += 1;
+                        let (mut sum, mut n) = (0.0f64, 0u32);
+                        for rr in br..r1 {
+                            for cc in bc..c1 {
+                                if (rr as isize - r as isize).abs() <= g
+                                    && (cc as isize - c as isize).abs() <= g
+                                {
+                                    continue;
+                                }
+                                let v = plane[[rr, cc]];
+                                if v.is_finite() {
+                                    sum += v as f64;
+                                    n += 1;
+                                }
+                            }
                         }
-                    }
-                }
-                for r in br..r1 {
-                    for c in bc..c1 {
-                        let v = plane[[r, c]];
-                        // Donut: excluir la contribución propia si existe.
-                        let (s2, n2) = if v.is_finite() {
-                            (sum - v as f64, n - 1)
-                        } else {
-                            (sum, n)
-                        };
-                        if n2 > 0 {
-                            oplane[[r, c]] = (s2 / n2 as f64) as f32;
+                        if n > 0 {
+                            oplane[[r, c]] = (sum / n as f64) as f32;
                         }
                     }
                 }
@@ -200,7 +202,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ..Default::default()
     };
     let delta = estimate_bias_terms(&stack, &cfg)?;
-    let delta_donut = donut_block_mean(&delta);
+    let delta_donut = donut_block_mean(&delta, BLOCK, 0);
     let (before, _) = closure_rms(&stack, cfg.max_span)?;
     let mut held = stack.clone();
     apply_bias_terms(&mut held, &delta_donut, &est.coefficients);
@@ -226,7 +228,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             meta: stack.meta.clone(),
         };
         let nd = estimate_bias_terms(&null_stack, &cfg)?;
-        let ndd = donut_block_mean(&nd);
+        let ndd = donut_block_mean(&nd, BLOCK, 0);
         let (nb, _) = closure_rms(&null_stack, cfg.max_span)?;
         let mut nh = null_stack.clone();
         apply_bias_terms(&mut nh, &ndd, &est.coefficients);
@@ -281,6 +283,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Reusa closure vía producto complejo por triplete: aquí lo
             // replicamos con la API pública mínima — para el driver basta
             // recomputar los cierres de span 2 y 3 a mano.
+            let (_, rows, cols) = s.data.dim();
             let mut acc = ndarray::Array2::<Complex32>::zeros((rows, cols));
             let index: std::collections::HashMap<(usize, usize), usize> = s
                 .pairs
@@ -295,8 +298,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .map(|i| index.get(&(i, i + 1)).copied())
                         .collect();
                     let Some(chain) = chain else { continue };
-                    for r in 0..rows {
-                        for c in 0..cols {
+                    let (_, rows_s, cols_s) = s.data.dim();
+                    for r in 0..rows_s {
+                        for c in 0..cols_s {
                             let unit = |z: Complex32| -> Option<Complex32> {
                                 let n = z.norm();
                                 (n.is_finite() && n > 0.0).then(|| z / n)
@@ -397,13 +401,61 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (name, coefs) in &sets {
         let cfg_s = PhaseBiasConfig { coefficients: Some(coefs.clone()), ..Default::default() };
         let d_s = estimate_bias_terms(&stack, &cfg_s)?;
-        let dd_s = donut_block_mean(&d_s);
+        let dd_s = donut_block_mean(&d_s, BLOCK, 0);
         let mut h_s = stack.clone();
         apply_bias_terms(&mut h_s, &dd_s, coefs);
         let g_after = global_mean_abs(&mean_closure_map(&h_s));
         let red = 100.0 * (1.0 - g_after / g_before);
         println!("    {name:<28} |media| {g_before:.4} → {g_after:.4} rad  (−{red:.0}%)");
         sens_sys.push((name.to_string(), g_after, red));
+    }
+
+    // ── 6. B1 (blind): reducción sistemática vs separación del hold-out ───
+    // Si la caída del cierre medio fuera fuga por correlación espacial del
+    // ruido (geocoding), decaería al aumentar bloque/guarda; si es sesgo
+    // real (suave a escala de paisaje), se mantiene.
+    println!("\n[6] reducción del cierre medio global vs separación del hold-out:");
+    let configs: [(usize, usize, &str); 4] = [
+        (8, 0, "block 8, donut (paper)"),
+        (8, 1, "block 8, guard 3\u{d7}3"),
+        (16, 0, "block 16, donut"),
+        (32, 0, "block 32, donut"),
+    ];
+    let mut sweep = Vec::new();
+    for (b, g, name) in configs {
+        let dd = donut_block_mean(&delta, b, g);
+        let mut h = stack.clone();
+        apply_bias_terms(&mut h, &dd, &est.coefficients);
+        let ga = global_mean_abs(&mean_closure_map(&h));
+        let red = 100.0 * (1.0 - ga / g_before);
+        println!("    {name:<24} |media| {g_before:.4} \u{2192} {ga:.4} rad  (\u{2212}{red:.0}%)");
+        sweep.push((name.to_string(), b, g, ga, red));
+    }
+    // Control: cierre medio sobre el nulo i.i.d., antes vs tras hold-out.
+    {
+        let mut rng = Lcg(0xFACADE);
+        let mut data =
+            Array3::<Complex32>::zeros((stack.pairs.len(), NULL_GRID, NULL_GRID));
+        for v in data.iter_mut() {
+            let phi = (rng.next_f32() * 2.0 - 1.0) * std::f32::consts::PI;
+            *v = Complex32::from_polar(1.0, phi);
+        }
+        let null_stack = IfgStack {
+            data,
+            epochs: stack.epochs.clone(),
+            pairs: stack.pairs.clone(),
+            meta: stack.meta.clone(),
+        };
+        let nb = global_mean_abs(&mean_closure_map(&null_stack));
+        let nd = estimate_bias_terms(&null_stack, &cfg)?;
+        let ndd = donut_block_mean(&nd, BLOCK, 0);
+        let mut nh = null_stack.clone();
+        apply_bias_terms(&mut nh, &ndd, &est.coefficients);
+        let na = global_mean_abs(&mean_closure_map(&nh));
+        println!(
+            "    control nulo: |media| {nb:.5} \u{2192} {na:.5} rad  (\u{394} = {:+.5})",
+            na - nb
+        );
     }
 
     // Export de mapas para la figura nueva (cierre medio antes/después +
@@ -443,6 +495,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "velocity_equivalent_mmyr": vel_equiv.iter().map(|(n, v, px)| serde_json::json!({
             "stratum": n, "mmyr": v, "n_px": px})).collect::<Vec<_>>(),
         "systematic_global_before_rad": g_before,
+        "holdout_separation_sweep": sweep.iter().map(|(n, b, g, a, r)| serde_json::json!({
+            "config": n, "block": b, "guard": g, "after_rad": a, "reduction_pct": r})).collect::<Vec<_>>(),
         "systematic_sensitivity": sens_sys.iter().map(|(n, a, r)| serde_json::json!({
             "set": n, "after_rad": a, "reduction_pct": r})).collect::<Vec<_>>(),
         "n_epochs": n_epochs, "n_obs": n_obs, "n_unknowns": n_unknowns,
