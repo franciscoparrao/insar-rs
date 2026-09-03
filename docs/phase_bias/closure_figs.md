@@ -88,3 +88,36 @@ python3 validation/make_figure_synthetic.py
   `figs/mean_coherence.tif` — GeoTIFF georreferenciados (EPSG:4326) para GIS.
 - `validation/phase_bias_export/` — crudos f32 + meta.json (insumo del script
   Python; gitignored como el resto de validation/ con datos).
+
+## Validación anti-circularidad (2026-09-02 — cambia la métrica del paper)
+
+El review C&G simulado objetó que la reducción del RMS de cierre es en parte
+el objetivo del ajuste (circularidad). `phase_bias_validation.rs` lo midió:
+
+| Experimento | Resultado |
+|---|---|
+| Reducción RMS in-sample (la métrica vieja) | 36.2 % |
+| **Nulo empírico** (fase aleatoria sin sesgo, 20 corridas) | **31.8 ± 0.1 %** |
+| Nulo analítico 1−√(1−p/n) (31 incógnitas / 59 cierres) | 31.1 % |
+| **Hold-out espacial** (δ̂ del bloque 8×8 donut) | **0.0 %** |
+
+→ El RMS por píxel NO es métrica válida: está dominado por absorción de
+grados de libertad + ruido de decorrelación. La métrica correcta es el
+**cierre medio (sistemático)**, evaluado con la corrección hold-out:
+
+| Clase WorldCover | media antes | después | reducc. | vel. espuria removida |
+|---|---|---|---|---|
+| Cropland  | −0.081 rad | −0.024 | 70 % | −4.8 mm/año |
+| Grassland | −0.081 | −0.027 | 66 % | −4.9 |
+| Tree cover| −0.059 | −0.015 | 74 % | −3.8 |
+| Built-up  | −0.042 | −0.007 | 84 % | −1.8 |
+
+Sensibilidad (hold-out, global): aₙ de escena −70 %; sets publicados
+(Turquía/Campi Flegrei/Azores) −64/−66 % → robusto, y estimar de la escena
+es lo mejor. Figura nueva: `figs/fig_systematic.pdf` (headline del paper);
+la figura RMS (`fig_closure.pdf`) queda como material histórico/cautionary.
+
+GNSS: `figs/fig_gnss_supp.pdf` (apéndice del paper) — CLL1 (NGL, SA-fixed)
++4.3 mm/año LOS vs flood-fill −37.0/+26.7 en el píxel de la estación.
+Datos de entrada archivables: `data/nuble_aoi_input_archive.tar.gz` (107 MB,
+171 pares AOI, para el deposit Zenodo — LiCSAR podó 91 pares del archivo).

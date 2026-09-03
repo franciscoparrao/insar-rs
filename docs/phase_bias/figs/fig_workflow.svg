@@ -39,8 +39,8 @@
   <g font-size="18" fill="#009E73">
     <path d="M 800 132 L 800 176" stroke="#009E73" stroke-width="1.6" stroke-dasharray="5 4" fill="none"/>
     <rect x="560" y="176" width="480" height="64" rx="10" fill="none" stroke="#009E73" stroke-width="1.6" stroke-dasharray="5 4"/>
-    <text x="800" y="202" text-anchor="middle" font-weight="bold">QC: closure-phase RMS before / after</text>
-    <text x="800" y="226" text-anchor="middle">wrapped domain — independent of unwrapping (−36% Ñuble)</text>
+    <text x="800" y="202" text-anchor="middle" font-weight="bold">QC: systematic (mean) closure phase</text>
+    <text x="800" y="226" text-anchor="middle">wrapped domain, held-out evaluation (−66 to −84% Ñuble)</text>
   </g>
 
   <!-- Row 0 arrows -->
@@ -90,7 +90,7 @@
 
   <!-- ═══ Footer: engine properties ═══ -->
   <g font-size="18" fill="#5a6a75">
-    <text x="720" y="560" text-anchor="middle">single static binary (3.5 MB) · no Python/GDAL in the core · Rayon parallelism · 233 unit tests</text>
+    <text x="720" y="560" text-anchor="middle">single static binary (3.5 MB) · no Python/GDAL in the core · Rayon parallelism · 230+ unit tests</text>
     <text x="720" y="588" text-anchor="middle">numerical parity with MintPy: r = 1.000000 (Fernandina benchmark)</text>
   </g>
 </svg>
