@@ -831,6 +831,64 @@ pub fn correct_phase_bias(
     })
 }
 
+/// Términos de sesgo unitario `δ̂_{t,t+1}` estimados por píxel: `slots × filas
+/// × cols` (slot `t` ↔ intervalo entre las épocas `t` y `t+1`), NaN donde el
+/// sistema de cierres del píxel no alcanza rango completo.
+///
+/// Es el producto intermedio de [`correct_phase_bias`] expuesto para
+/// validación out-of-sample: p. ej. promediar δ̂ por bloques espaciales y
+/// aplicar la corrección con parámetros ajenos al píxel evaluado (el sesgo
+/// real es espacialmente suave; el sobreajuste por píxel no lo es).
+pub fn estimate_bias_terms(
+    stack: &IfgStack,
+    config: &PhaseBiasConfig,
+) -> Result<Array3<f32>> {
+    stack.validate()?;
+    check_span(config.max_span)?;
+    let coefficients = match &config.coefficients {
+        Some(a) => a.clone(),
+        None => estimate_coefficients(stack, config)?.coefficients,
+    };
+    let topo = ClosureTopology::build(stack, config.max_span);
+    if topo.obs.is_empty() {
+        return Err(InsarError::InvalidNetwork(
+            "la red no tiene fases de cierre evaluables".into(),
+        ));
+    }
+    let design = topo.design(&coefficients);
+    let n_slots = stack.epochs.len().saturating_sub(1);
+    let (n_rows, n_cols) = stack.dims();
+    let data = stack.data.view();
+
+    let mut out = Array3::<f32>::from_elem((n_slots, n_rows, n_cols), f32::NAN);
+    let mut planes: Vec<_> = out.axis_iter_mut(Axis(1)).collect();
+    planes.par_iter_mut().enumerate().for_each(|(r, plane)| {
+        for c in 0..n_cols {
+            let mut rows = Vec::with_capacity(topo.obs.len());
+            let mut vals = Vec::with_capacity(topo.obs.len());
+            for (o, ob) in topo.obs.iter().enumerate() {
+                if let Some(v) = closure_at(ob, |k| data[[k, r, c]]) {
+                    rows.push(o);
+                    vals.push(v);
+                }
+            }
+            if rows.len() < topo.n_unknowns {
+                continue;
+            }
+            let reduced =
+                DMatrix::from_fn(rows.len(), topo.n_unknowns, |i, j| design[(rows[i], j)]);
+            let Some(pinv) = rcond_pseudo_inverse(reduced) else { continue };
+            let delta = pinv * DVector::from_vec(vals);
+            for (slot, col) in topo.unit_col.iter().enumerate() {
+                if let Some(col) = col {
+                    plane[[slot, c]] = delta[*col] as f32;
+                }
+            }
+        }
+    });
+    Ok(out)
+}
+
 /// Mapa de sesgo acumulado por época: `Σ_{k<e} δ̂_{k,k+1}`, el producto que
 /// permite ver la firma temporal del sesgo (Fig. 4 del paper: acumulación que
 /// imita subsidencia en cultivo).
@@ -1169,6 +1227,31 @@ mod tests {
             rep.closure_rms_after
         );
         assert!(rep.closure_rms_after < 1e-4, "modelo exacto: residuo ≈ 0");
+    }
+
+    #[test]
+    fn estimate_bias_terms_recupera_los_delta_verdaderos() {
+        // Modelo exacto: los δ̂ por slot deben coincidir con los sembrados.
+        let n = 10;
+        let a_true = vec![0.5, 0.3];
+        let bias: Vec<f64> = (0..n - 1).map(|i| 0.03 * ((i % 4) as f64 + 1.0)).collect();
+        let def: Vec<f64> = (0..n).map(|e| 0.02 * e as f64).collect();
+        let stack = synth(n, 3, &def, &bias, &a_true, 2, 3);
+        let cfg = PhaseBiasConfig { coefficients: Some(a_true), ..Default::default() };
+        let d = estimate_bias_terms(&stack, &cfg).unwrap();
+        assert_eq!(d.dim(), (n - 1, 2, 3));
+        for slot in 0..n - 1 {
+            for r in 0..2 {
+                for c in 0..3 {
+                    assert!(
+                        (d[[slot, r, c]] as f64 - bias[slot]).abs() < 1e-4,
+                        "slot {slot}: {} vs {}",
+                        d[[slot, r, c]],
+                        bias[slot]
+                    );
+                }
+            }
+        }
     }
 
     #[test]
