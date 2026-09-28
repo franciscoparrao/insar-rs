@@ -142,7 +142,27 @@ pub struct PhaseBiasConfig {
     /// reportados —orden de radianes en cultivo y bosque— así que solo rechaza
     /// el caso degenerado.
     pub min_cumulative_closure_rad: f64,
+    /// Enmascarado robusto de cierres atípicos antes del ajuste (Maghsoudi et
+    /// al. 2025, §2.1). Por píxel y por span, cada cierre se compara con la
+    /// media móvil circular de su serie temporal (ventana de
+    /// [`OUTLIER_WINDOW`] loops); se descarta si su desvío envuelto supera
+    /// `k·σ`, con σ la desviación estándar circular de los desvíos del span.
+    /// `None` = sin enmascarado (mínimos cuadrados sobre todos los cierres).
+    /// Default `Some(2.0)`: sin él, las colas del cierre envuelto dominan el
+    /// ajuste en píxeles coherentes (Ñuble, hold-out en loops: 12–25 % de
+    /// reducción del cierre retenido sin enmascarar, 82–96 % con k = 2).
+    pub outlier_sigma: Option<f64>,
 }
+
+/// Ventana (en loops consecutivos del mismo span) de la media móvil circular
+/// del enmascarado robusto.
+pub const OUTLIER_WINDOW: usize = 5;
+
+/// Piso de σ (rad) del enmascarado robusto. Sin piso, una serie de cierres
+/// limpia pero con estructura temporal (sesgo estacional en un píxel muy
+/// coherente) tiene σ ≈ 0 y se descartarían cierres válidos: los desvíos
+/// respecto de la media móvil son señal, no ruido.
+pub const OUTLIER_SIGMA_FLOOR: f64 = 0.1;
 
 impl Default for PhaseBiasConfig {
     fn default() -> Self {
@@ -153,8 +173,76 @@ impl Default for PhaseBiasConfig {
             coefficient_mask: None,
             min_coefficient_pixels: 100,
             min_cumulative_closure_rad: 0.05,
+            outlier_sigma: Some(2.0),
         }
     }
+}
+
+/// Marca como descartados (`None`) los cierres atípicos de un píxel: para cada
+/// span, desvío envuelto respecto de la media móvil circular de su serie
+/// temporal, y descarte si |desvío| > k·σ_circular. Con menos de 3 cierres
+/// válidos en un span no se descarta nada ahí (no hay estadística).
+fn mask_outliers(topo: &ClosureTopology, vals: &mut [Option<f64>], k: f64) {
+    let max_span = topo.obs.iter().map(|o| o.span).max().unwrap_or(0);
+    for span in 2..=max_span {
+        // Índices de observación de este span con valor, en orden temporal.
+        let mut idx: Vec<usize> = (0..topo.obs.len())
+            .filter(|&o| topo.obs[o].span == span && vals[o].is_some())
+            .collect();
+        idx.sort_by_key(|&o| topo.obs[o].cols[0]);
+        if idx.len() < 3 {
+            continue;
+        }
+        let half = OUTLIER_WINDOW / 2;
+        let dev: Vec<f64> = (0..idx.len())
+            .map(|j| {
+                let lo = j.saturating_sub(half);
+                let hi = (j + half + 1).min(idx.len());
+                let (s, c) = idx[lo..hi]
+                    .iter()
+                    .map(|&o| vals[o].unwrap())
+                    .fold((0.0, 0.0), |(s, c), v| (s + v.sin(), c + v.cos()));
+                let d = vals[idx[j]].unwrap() - s.atan2(c);
+                (d + std::f64::consts::PI).rem_euclid(2.0 * std::f64::consts::PI) - std::f64::consts::PI
+            })
+            .collect();
+        let (s, c) = dev.iter().fold((0.0, 0.0), |(s, c), d| (s + d.sin(), c + d.cos()));
+        let r = (s * s + c * c).sqrt() / dev.len() as f64;
+        if !(r > 0.0) {
+            continue;
+        }
+        let sigma = (-2.0 * r.min(1.0).ln()).sqrt().max(OUTLIER_SIGMA_FLOOR);
+        for (j, d) in dev.iter().enumerate() {
+            if d.abs() > k * sigma {
+                vals[idx[j]] = None;
+            }
+        }
+    }
+}
+
+/// Cierres de un píxel listos para el ajuste: máscara de observaciones activas
+/// y sus valores, tras el enmascarado robusto opcional. Es la única ruta por
+/// la que [`correct_phase_bias`] y [`estimate_bias_terms`] leen cierres, para
+/// que el patrón de máscara (clave del caché de solvers) y los valores sean
+/// siempre consistentes.
+fn pixel_closures(
+    topo: &ClosureTopology,
+    read: impl Fn(usize) -> Complex32,
+    outlier_sigma: Option<f64>,
+) -> (Vec<u64>, Vec<f64>) {
+    let mut vals: Vec<Option<f64>> = topo.obs.iter().map(|ob| closure_at(ob, &read)).collect();
+    if let Some(k) = outlier_sigma {
+        mask_outliers(topo, &mut vals, k);
+    }
+    let mut key = vec![0u64; topo.obs.len().div_ceil(64)];
+    let mut active = Vec::with_capacity(vals.len());
+    for (o, v) in vals.into_iter().enumerate() {
+        if let Some(v) = v {
+            key[o / 64] |= 1u64 << (o % 64);
+            active.push(v);
+        }
+    }
+    (key, active)
 }
 
 /// Coeficientes `aₙ` estimados de los datos.
@@ -707,9 +795,8 @@ pub fn correct_phase_bias(
     // 3. Pseudoinversa por patrón de observaciones activas. La matriz de diseño
     //    no depende del píxel; solo depende de QUÉ observaciones son válidas
     //    ahí, así que se cachea por máscara igual que en `invert_sbas`.
-    let n_words = n_obs.div_ceil(64);
-    let mask_bit = |key: &mut [u64], o: usize| key[o / 64] |= 1u64 << (o % 64);
     let (n_rows, n_cols) = stack.dims();
+    let outlier_sigma = config.outlier_sigma;
 
     let data_ro = stack.data.view();
     let unique_masks: HashSet<Vec<u64>> = (0..n_rows)
@@ -717,13 +804,13 @@ pub fn correct_phase_bias(
         .map(|r| {
             let mut set = HashSet::new();
             for c in 0..n_cols {
-                let mut key = vec![0u64; n_words];
-                for (o, ob) in topo.obs.iter().enumerate() {
-                    if closure_at(ob, |k| data_ro[[k, r, c]]).is_some() {
-                        mask_bit(&mut key, o);
-                    }
-                }
+                let (key, _) = pixel_closures(&topo, |k| data_ro[[k, r, c]], outlier_sigma);
                 set.insert(key);
+                // Respaldo sin enmascarar (ver paso 4a): su patrón también
+                // necesita solver.
+                if outlier_sigma.is_some() {
+                    set.insert(pixel_closures(&topo, |k| data_ro[[k, r, c]], None).0);
+                }
             }
             set
         })
@@ -781,14 +868,14 @@ pub fn correct_phase_bias(
         .map(|row| {
             let mut local = (0usize, 0usize);
             for c in 0..n_cols {
-                // (a) Cierres activos del píxel y su máscara.
-                let mut key = vec![0u64; n_words];
-                let mut vals: Vec<f64> = Vec::with_capacity(n_obs);
-                for (o, ob) in topo.obs.iter().enumerate() {
-                    if let Some(v) = closure_at(ob, |k| row[[k, c]]) {
-                        mask_bit(&mut key, o);
-                        vals.push(v);
-                    }
+                // (a) Cierres activos del píxel (tras el enmascarado robusto
+                //     opcional) y su máscara.
+                //     Si el enmascarado deja el sistema rank-deficiente, se
+                //     ajusta sin enmascarar antes que dejar el píxel sin
+                //     corregir.
+                let (mut key, mut vals) = pixel_closures(&topo, |k| row[[k, c]], outlier_sigma);
+                if outlier_sigma.is_some() && !matches!(solvers.get(&key), Some(Some(_))) {
+                    (key, vals) = pixel_closures(&topo, |k| row[[k, c]], None);
                 }
 
                 // (b) Solver del patrón. Rank-deficiente → píxel intacto.
@@ -877,20 +964,24 @@ pub fn estimate_bias_terms(
     let mut planes: Vec<_> = out.axis_iter_mut(Axis(1)).collect();
     planes.par_iter_mut().enumerate().for_each(|(r, plane)| {
         for c in 0..n_cols {
-            let mut rows = Vec::with_capacity(topo.obs.len());
-            let mut vals = Vec::with_capacity(topo.obs.len());
-            for (o, ob) in topo.obs.iter().enumerate() {
-                if let Some(v) = closure_at(ob, |k| data[[k, r, c]]) {
-                    rows.push(o);
-                    vals.push(v);
+            // Enmascarado robusto con respaldo sin enmascarar si deja el
+            // sistema rank-deficiente (igual que en `correct_phase_bias`).
+            let solve = |outlier: Option<f64>| {
+                let (key, vals) = pixel_closures(&topo, |k| data[[k, r, c]], outlier);
+                let rows: Vec<usize> =
+                    (0..topo.obs.len()).filter(|&o| key[o / 64] & (1u64 << (o % 64)) != 0).collect();
+                if rows.len() < topo.n_unknowns {
+                    return None;
                 }
-            }
-            if rows.len() < topo.n_unknowns {
-                continue;
-            }
-            let reduced =
-                DMatrix::from_fn(rows.len(), topo.n_unknowns, |i, j| design[(rows[i], j)]);
-            let Some(pinv) = rcond_pseudo_inverse(reduced) else { continue };
+                let reduced =
+                    DMatrix::from_fn(rows.len(), topo.n_unknowns, |i, j| design[(rows[i], j)]);
+                rcond_pseudo_inverse(reduced).map(|pinv| (pinv, vals))
+            };
+            let solved = match config.outlier_sigma {
+                Some(k) => solve(Some(k)).or_else(|| solve(None)),
+                None => solve(None),
+            };
+            let Some((pinv, vals)) = solved else { continue };
             let delta = pinv * DVector::from_vec(vals);
             for (slot, col) in topo.unit_col.iter().enumerate() {
                 if let Some(col) = col {
@@ -1263,6 +1354,76 @@ mod tests {
                         bias[slot]
                     );
                 }
+            }
+        }
+    }
+
+    /// Enmascarado robusto (Maghsoudi 2025 §2.1): con datos que siguen el
+    /// modelo exactamente no descarta nada, y el resultado es idéntico al de
+    /// mínimos cuadrados puros.
+    #[test]
+    fn enmascarado_robusto_no_toca_datos_limpios() {
+        let n = 16;
+        let a_true = vec![0.5, 0.3];
+        let bias: Vec<f64> = (0..n - 1).map(|i| 0.03 * ((i % 4) as f64 + 1.0)).collect();
+        let def: Vec<f64> = (0..n).map(|e| 0.02 * e as f64).collect();
+        let stack = synth(n, 3, &def, &bias, &a_true, 2, 2);
+        let plain = PhaseBiasConfig {
+            coefficients: Some(a_true.clone()),
+            outlier_sigma: None,
+            ..Default::default()
+        };
+        let robust = PhaseBiasConfig { outlier_sigma: Some(2.0), ..plain.clone() };
+        let (dp, dr) = (
+            estimate_bias_terms(&stack, &plain).unwrap(),
+            estimate_bias_terms(&stack, &robust).unwrap(),
+        );
+        for (p, r) in dp.iter().zip(dr.iter()) {
+            assert!((p - r).abs() < 1e-6, "{p} vs {r}");
+        }
+    }
+
+    /// Un interferograma largo corrompido (fase desplazada 2 rad) contamina un
+    /// cierre de span 3; el enmascarado robusto lo descarta y los δ̂ vuelven al
+    /// valor verdadero, mientras que mínimos cuadrados puros lo reparten entre
+    /// los slots vecinos.
+    #[test]
+    fn enmascarado_robusto_descarta_un_cierre_atipico() {
+        let n = 16;
+        let a_true = vec![0.5, 0.3];
+        let bias: Vec<f64> = (0..n - 1).map(|i| 0.03 * ((i % 4) as f64 + 1.0)).collect();
+        let def: Vec<f64> = (0..n).map(|e| 0.02 * e as f64).collect();
+        let mut stack = synth(n, 3, &def, &bias, &a_true, 1, 1);
+        let bad = stack.pairs.iter().position(|p| p.reference == 7 && p.secondary == 10).unwrap();
+        stack.data[[bad, 0, 0]] *= Complex32::from_polar(1.0, 2.0);
+
+        let plain = PhaseBiasConfig {
+            coefficients: Some(a_true.clone()),
+            outlier_sigma: None,
+            ..Default::default()
+        };
+        let robust = PhaseBiasConfig { outlier_sigma: Some(2.0), ..plain.clone() };
+        let err = |d: &Array3<f32>| -> f64 {
+            (0..n - 1).map(|s| (d[[s, 0, 0]] as f64 - bias[s]).abs()).fold(0.0, f64::max)
+        };
+        let (ep, er) = (
+            err(&estimate_bias_terms(&stack, &plain).unwrap()),
+            err(&estimate_bias_terms(&stack, &robust).unwrap()),
+        );
+        assert!(ep > 0.1, "mínimos cuadrados puros deberían contaminarse: {ep}");
+        assert!(er < 1e-4, "el enmascarado robusto debería recuperar δ: {er}");
+
+        // Misma ruta en correct_phase_bias: el píxel corregido debe quedar con
+        // cierre ~0 en todos los loops salvo el corrompido.
+        let mut s = stack.clone();
+        correct_phase_bias(&mut s, &robust).unwrap();
+        let topo = ClosureTopology::build(&s, 3);
+        for ob in &topo.obs {
+            let v = closure_at(ob, |k| s.data[[k, 0, 0]]).unwrap();
+            if ob.long_layer == bad {
+                assert!(v.abs() > 1.0, "el cierre corrompido debe quedar visible: {v}");
+            } else {
+                assert!(v.abs() < 1e-3, "cierre residual {v} en span {}", ob.span);
             }
         }
     }
