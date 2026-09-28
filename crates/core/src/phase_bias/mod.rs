@@ -621,10 +621,23 @@ pub fn estimate_coefficients(
         }
     }
 
+    // Lapso real de las anclas usadas (mediana), no el lapso típico de ese
+    // span en la serie: con muestreo mixto 6/12 d difieren mucho (Ñuble: ancla
+    // real de 84 d reportada antes como 144 d).
+    let mut used: Vec<f64> = anchor_obs
+        .iter()
+        .map(|(k, _)| {
+            let p = &stack.pairs[*k];
+            stack.epochs[p.secondary].days_since(&stack.epochs[p.reference]) as f64
+        })
+        .collect();
+    used.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let anchor_days_used = used[used.len() / 2];
+
     Ok(CoefficientEstimate {
         coefficients,
         anchor_span,
-        anchor_days: days_of(anchor_span),
+        anchor_days: anchor_days_used,
         n_anchors: anchor_obs.len(),
         n_pixels,
         cumulative_unit_closure: denom,
