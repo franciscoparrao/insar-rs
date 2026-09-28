@@ -539,6 +539,9 @@ pub fn invert_sbas_ext(
 /// incrementos, sin ningún error ni NaN.
 const CHOLESKY_MIN_RELATIVE_PIVOT: f64 = 1e-6;
 
+/// Umbral de coherencia saturada para [`select_reference_pixel`].
+pub const SATURATED_COHERENCE: f32 = 0.999;
+
 /// Arma y resuelve las ecuaciones normales ponderadas `(AᵀWA)·x = AᵀW·b`
 /// sobre las filas `valid_idx` de `a_ext` (con `b`/`w` alineados a
 /// `valid_idx`), reutilizando los buffers `nmat`/`yvec`. `None` si el sistema
@@ -691,6 +694,14 @@ fn reduced_pinv(
 /// pero sin relación con lo que se está midiendo (visto en producción:
 /// referencia a 25 km del AOI, sobre un vacío de DEM). `None` también si
 /// `region` no coincide en dimensiones con `coh` o no deja ningún píxel.
+///
+/// Se descartan los píxeles con coherencia ≥ [`SATURATED_COHERENCE`] en más
+/// de la mitad de sus pares válidos: una coherencia multilook real casi nunca
+/// alcanza 0.999, así que ese valor repetido delata un estimador saturado.
+/// Visto en producción (LiCSAR 083D_12636, Ñuble): 6 píxeles con coherencia
+/// 1.000 en los 90 pares pero fase aleatoria; al elegir uno como referencia,
+/// su pantalla de corrección de phase bias (−17 mm/año) se transfería a toda
+/// la escena.
 pub fn select_reference_pixel(
     coh: &Array3<f32>,
     region: Option<&Array2<bool>>,
@@ -709,15 +720,20 @@ pub fn select_reference_pixel(
                 if region.is_some_and(|m| !m[[r, c]]) {
                     continue;
                 }
-                let (mut sum, mut n) = (0.0_f64, 0u32);
+                let (mut sum, mut n, mut saturated) = (0.0_f64, 0u32, 0u32);
                 for k in 0..n_pairs {
                     let v = coh[[k, r, c]];
                     if v.is_finite() {
                         sum += f64::from(v);
                         n += 1;
+                        if v >= SATURATED_COHERENCE {
+                            saturated += 1;
+                        }
                     }
                 }
-                if n > 0 {
+                // Coherencia saturada en la mayoría de los pares = estimador
+                // roto, no un dispersor estable (ver `SATURATED_COHERENCE`).
+                if n > 0 && 2 * saturated <= n {
                     let mean = (sum / f64::from(n)) as f32;
                     let key = (n, mean);
                     if best.is_none_or(|(bk, _)| key > bk) {
@@ -1909,6 +1925,32 @@ mod tests {
         // Región con dims distintas a `coh` → None (no se ignora en silencio).
         let mismatch = Array2::from_elem((2, 2), true);
         assert_eq!(select_reference_pixel(&coh, Some(&mismatch)), None);
+    }
+
+    /// Regresión (Ñuble, 2026-09-28): un píxel con coherencia saturada (1.0)
+    /// en todos los pares no debe elegirse como referencia, aunque tenga la
+    /// mayor media; uno saturado en una minoría de pares sigue siendo elegible.
+    #[test]
+    fn referencia_descarta_coherencia_saturada() {
+        let mut coh = Array3::from_elem((10, 2, 3), 0.6_f32);
+        for k in 0..10 {
+            coh[[k, 0, 0]] = 1.0; // saturado en 10/10 → descartado
+            coh[[k, 1, 1]] = 0.8; // el mejor dispersor real
+        }
+        assert_eq!(select_reference_pixel(&coh, None), Some((1, 1)));
+
+        // Saturado en 3 de 10 pares (minoría): elegible, y gana por media.
+        for k in 0..3 {
+            coh[[k, 1, 2]] = 1.0;
+        }
+        for k in 3..10 {
+            coh[[k, 1, 2]] = 0.9;
+        }
+        assert_eq!(select_reference_pixel(&coh, None), Some((1, 2)));
+
+        // Si todo está saturado no queda candidato.
+        let todo = Array3::from_elem((4, 2, 2), 1.0_f32);
+        assert_eq!(select_reference_pixel(&todo, None), None);
     }
 
     /// Regresión: un píxel de borde finito en solo 2 de 10 pares (media 0.99
