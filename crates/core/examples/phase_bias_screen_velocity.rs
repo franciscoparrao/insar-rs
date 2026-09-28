@@ -16,16 +16,26 @@ use insar_core::phase_bias::{PhaseBiasConfig, correct_phase_bias, estimate_coeff
 use insar_core::types::UnwrappedStack;
 use ndarray::Array3;
 
+/// `PB_COEFS="a2,a3"` fija los aₙ (p. ej. Maghsoudi 2025 Fig. 11, base 12 d);
+/// sin la variable se estiman de la red completa como en el paper original.
+fn coefs_from_env() -> Option<Vec<f64>> {
+    std::env::var("PB_COEFS").ok().map(|v| v.split(',').map(|x| x.trim().parse().expect("PB_COEFS")).collect())
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dir = PathBuf::from(
         std::env::args().nth(1).unwrap_or_else(|| "data/licsar_083D_12636/GEOC".into()),
     );
     let d = |s: &str| NaiveDate::parse_from_str(s, "%Y%m%d").unwrap();
     let aoi = Aoi { min_lon: -72.20, max_lon: -71.80, min_lat: -36.80, max_lat: -36.40 };
-    let est = estimate_coefficients(
+    let coefficients = match coefs_from_env() {
+        Some(a) => a,
+        None => estimate_coefficients(
         &read_licsar_stack(&dir, &LicsarLoadConfig { aoi: Some(aoi), ..Default::default() })?,
         &PhaseBiasConfig { anchor_days: 72.0, ..Default::default() },
-    )?;
+        )?
+        .coefficients,
+    };
     let load = LicsarLoadConfig {
         aoi: Some(aoi),
         date_range: Some((d("20211221"), d("20221228"))),
@@ -36,7 +46,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut c = b.clone();
     correct_phase_bias(
         &mut c,
-        &PhaseBiasConfig { coefficients: Some(est.coefficients.clone()), ..Default::default() },
+        &PhaseBiasConfig { coefficients: Some(coefficients.clone()), ..Default::default() },
     )?;
 
     let (n, rows, cols) = b.data.dim();
@@ -54,7 +64,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let s = UnwrappedStack { data: screen, epochs: b.epochs.clone(), pairs: b.pairs.clone(), meta: b.meta.clone() };
     let v = estimate_velocity(&invert_sbas(&s, None)?)?.data;
 
-    let out = PathBuf::from("validation/phase_bias_export/unw_snaphu");
+    let out = PathBuf::from(std::env::var("OUT_DIR").unwrap_or_else(|_| "validation/phase_bias_export/unw_snaphu".into()));
     std::fs::create_dir_all(&out)?;
     let bytes: Vec<u8> = v.iter().flat_map(|x| (x * 1000.0).to_le_bytes()).collect();
     std::fs::write(out.join("vel_screen_unref_mmyr.f32"), bytes)?;

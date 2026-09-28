@@ -111,6 +111,12 @@ fn write_f32(a: &Array2<f32>, path: &std::path::Path) -> std::io::Result<()> {
     std::fs::write(path, bytes)
 }
 
+/// `PB_COEFS="a2,a3"` fija los aₙ (p. ej. Maghsoudi 2025 Fig. 11, base 12 d);
+/// sin la variable se estiman de la red completa como en el paper original.
+fn coefs_from_env() -> Option<Vec<f64>> {
+    std::env::var("PB_COEFS").ok().map(|v| v.split(',').map(|x| x.trim().parse().expect("PB_COEFS")).collect())
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let dir = PathBuf::from(args.next().unwrap_or_else(|| "data/licsar_083D_12636/GEOC".into()));
@@ -119,11 +125,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let aoi = Aoi { min_lon: -72.20, max_lon: -71.80, min_lat: -36.80, max_lat: -36.40 };
 
     // Coeficientes: mismos que el paper (red completa, ancla de 72 d).
-    let est = estimate_coefficients(
+    let coefficients = match coefs_from_env() {
+        Some(a) => a,
+        None => estimate_coefficients(
         &read_licsar_stack(&dir, &LicsarLoadConfig { aoi: Some(aoi), ..Default::default() })?,
         &PhaseBiasConfig { anchor_days: 72.0, ..Default::default() },
-    )?;
-    println!("coeficientes aₙ = {:?}", est.coefficients);
+        )?
+        .coefficients,
+    };
+    println!("coeficientes aₙ = {:?}", coefficients);
 
     let load = LicsarLoadConfig {
         aoi: Some(aoi),
@@ -135,7 +145,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut stack_c = stack_b.clone();
     correct_phase_bias(
         &mut stack_c,
-        &PhaseBiasConfig { coefficients: Some(est.coefficients.clone()), ..Default::default() },
+        &PhaseBiasConfig { coefficients: Some(coefficients.clone()), ..Default::default() },
     )?;
     let refrc = select_reference_pixel(&coh, None).ok_or("sin píxel de referencia válido")?;
     let gt = stack_b.meta.transform;
@@ -181,7 +191,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let out = PathBuf::from(format!("validation/phase_bias_export/unw_{method}"));
+    let tag = std::env::var("OUT_TAG").unwrap_or_default();
+    let out = PathBuf::from(format!("validation/phase_bias_export/unw_{method}{tag}"));
     std::fs::create_dir_all(&out)?;
     for (name, u) in [("unw_biased", &unw_b), ("unw_corrected", &unw_c)] {
         let bytes: Vec<u8> = u.data.iter().flat_map(|x| x.to_le_bytes()).collect();
@@ -198,7 +209,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     write_f32(&changed_px, &out.join("cycle_changes_layers.f32"))?;
     let summary = serde_json::json!({
         "method": method,
-        "coefficients": est.coefficients,
+        "coefficients": coefficients,
         "rows": vel_b.nrows(), "cols": vel_b.ncols(),
         "geo": {"lon0": gt.origin_x, "lat0": gt.origin_y,
                 "dlon": gt.pixel_width, "dlat": gt.pixel_height},
