@@ -158,8 +158,13 @@ fn run_snaphu(
 
     let corr_path = dir.join(CORRFILE_NAME);
     let has_corr = if let Some(q) = quality {
-        let masked =
-            Array2::from_shape_fn((rows, cols), |(r, c)| if nan_mask[[r, c]] { 0.0 } else { q[[r, c]] });
+        // snaphu aborta con cualquier no-finito en CORRFILE, y la coherencia
+        // puede traer NaN propios (p. ej. LiCSAR `geo.cc.tif`) donde la fase
+        // es válida: no-finito → 0.0 ("no confiable"), el resto a [0, 1].
+        let masked = Array2::from_shape_fn((rows, cols), |(r, c)| {
+            let v = q[[r, c]];
+            if nan_mask[[r, c]] || !v.is_finite() { 0.0 } else { v.clamp(0.0, 1.0) }
+        });
         write_float_raw(&corr_path, &masked)?;
         true
     } else {
@@ -357,6 +362,23 @@ mod tests {
         let truth = ramp(24, 20, 0.45, 0.35);
         let wrapped = wrap(&truth);
         let quality = Array2::from_elem((24, 20), 0.9_f32);
+        let config = SnaphuConfig::default();
+        let unw = unwrap_2d_snaphu(&wrapped, Some(&quality), &config).unwrap();
+        assert_matches_ramp(&unw, &truth, (12, 10), 1e-3);
+    }
+
+    /// Regresión (Ñuble, 2026-09-28): la coherencia LiCSAR trae NaN propios
+    /// donde la fase es válida; snaphu abortaba con "NaN or infinity found in
+    /// correlation data". Deben enviarse como coherencia 0.0.
+    #[test]
+    #[ignore = "requiere el binario snaphu en PATH (conda install -c conda-forge snaphu)"]
+    fn coherencia_con_nan_no_aborta_snaphu() {
+        let truth = ramp(24, 20, 0.45, 0.35);
+        let wrapped = wrap(&truth);
+        let mut quality = Array2::from_elem((24, 20), 0.9_f32);
+        quality[[3, 4]] = f32::NAN;
+        quality[[20, 15]] = f32::INFINITY;
+        quality[[10, 2]] = 1.7; // fuera de rango: se acota a 1.0
         let config = SnaphuConfig::default();
         let unw = unwrap_2d_snaphu(&wrapped, Some(&quality), &config).unwrap();
         assert_matches_ramp(&unw, &truth, (12, 10), 1e-3);
