@@ -31,6 +31,7 @@ use std::fs;
 use std::path::Path;
 
 use insar_core::phase_bias::PhaseBiasConfig;
+use insar_core::pipeline::PhaseBiasStage;
 use insar_core::pipeline::{run_sbas, SbasPipelineConfig};
 use insar_core::types::SENTINEL1_WAVELENGTH_M;
 
@@ -228,5 +229,21 @@ fn run_e2e(base: &Path) {
         err_corrected < err_biased / 10.0,
         "la corrección debe reducir el error al menos un orden de magnitud: \
          {err_biased} → {err_corrected}"
+    );
+
+    // --- Misma corrección aplicada ANTES del desenrollado: en este stack
+    //     sintético (sin ruido, fases lejos de ±π) ambas etapas deben
+    //     coincidir; en datos reales difieren por los cambios de ciclo que
+    //     la corrección previa induce en el desenrollado.
+    let before = run_sbas(&SbasPipelineConfig {
+        phase_bias_stage: PhaseBiasStage::BeforeUnwrap,
+        ..config(&biased_in, &base.join("out_before"), Some(pb_config()))
+    })
+    .expect("pipeline con corrección antes del desenrollado");
+    let v_before = before.velocity.data[[center, center]] as f64;
+    assert!(
+        (v_before - v_corrected).abs() < 1e-6,
+        "antes y después del desenrollado deben coincidir en el sintético: \
+         {v_before} vs {v_corrected}"
     );
 }

@@ -130,16 +130,16 @@ pub struct SbasPipelineConfig {
     /// Corregir errores de desenrollado por cierre de fase antes de invertir
     /// (default `true`; es no-op verificado en stacks sin cierres ≠ 0).
     pub correct_unwrap: bool,
-    /// Corregir el sesgo de fase de no-cierre (*phase bias*) sobre los
-    /// interferogramas **envueltos**, antes de desenrollar
-    /// ([`crate::phase_bias`]). `None` = no corregir (default).
-    ///
-    /// Va antes del desenrollado porque el sesgo es una perturbación de la
-    /// fase envuelta: corregirlo después obligaría a re-desenrollar. No
-    /// confundir con `correct_unwrap`, que actúa **después** y sobre saltos
-    /// enteros de 2π — son problemas ortogonales (ver doc de
-    /// [`crate::phase_bias`]).
+    /// Corregir el sesgo de fase de no-cierre (*phase bias*)
+    /// ([`crate::phase_bias`]). `None` = no corregir (default). La
+    /// estimación siempre usa los cierres de la fase **envuelta**; dónde se
+    /// aplica la corrección lo decide `phase_bias_stage`. No confundir con
+    /// `correct_unwrap`, que actúa sobre saltos enteros de 2π — son problemas
+    /// ortogonales (ver doc de [`crate::phase_bias`]).
     pub phase_bias: Option<PhaseBiasConfig>,
+    /// Dónde se aplica la corrección de phase bias (default
+    /// [`PhaseBiasStage::AfterUnwrap`]).
+    pub phase_bias_stage: PhaseBiasStage,
     /// Píxel de referencia (fila, col). `None` = automático: máxima
     /// coherencia media si hay coherencia; sin referenciar si no la hay.
     pub reference: Option<(usize, usize)>,
@@ -157,6 +157,24 @@ pub struct SbasPipelineConfig {
     pub deramp: Option<RampKind>,
 }
 
+/// Dónde aplica el pipeline la corrección de phase bias. La estimación de
+/// los términos de sesgo usa siempre la fase envuelta; lo que cambia es sobre
+/// qué fase se resta la corrección.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PhaseBiasStage {
+    /// Resta la corrección a la fase YA desenrollada (default). El
+    /// desenrollado ve los mismos interferogramas que sin corrección, así que
+    /// la corrección no puede cambiar la solución entera. En Ñuble (LiCSAR
+    /// 083D_12636), aplicarla antes del desenrollado introdujo cambios de
+    /// ciclo que agregaron +1–1.6 mm/año (SNAPHU) y −22 a −27 mm/año
+    /// (desenrollado guiado por coherencia) de error en vegetación.
+    #[default]
+    AfterUnwrap,
+    /// Corrige los interferogramas envueltos antes de desenrollar
+    /// (comportamiento original del pipeline).
+    BeforeUnwrap,
+}
+
 impl SbasPipelineConfig {
     /// Config con los defaults del pipeline: sin PS, corrección de cierre
     /// activada, referencia automática, OLS sin error de DEM, sin deramp.
@@ -171,6 +189,7 @@ impl SbasPipelineConfig {
             unwrap_backend: UnwrapBackend::default(),
             correct_unwrap: true,
             phase_bias: None,
+            phase_bias_stage: PhaseBiasStage::default(),
             reference: None,
             reference_region: None,
             solver: SbasSolverConfig::default(),
@@ -257,12 +276,27 @@ pub fn run_sbas(config: &SbasPipelineConfig) -> Result<SbasProducts> {
         None => None,
     };
 
-    // 3) Sesgo de fase de no-cierre, sobre la fase ENVUELTA. Tiene que ir
-    //     aquí: es una perturbación de la fase envuelta, así que corregirlo
-    //     después del desenrollado obligaría a re-desenrollar.
-    let phase_bias_report = match &config.phase_bias {
-        Some(pb_config) => Some(phase_bias::correct_phase_bias(&mut stack, pb_config)?),
-        None => None,
+    // 3) Sesgo de fase de no-cierre: estimado siempre sobre los cierres de
+    //     la fase ENVUELTA. Con `BeforeUnwrap` se corrige aquí el stack que
+    //     se va a desenrollar; con `AfterUnwrap` (default) se guarda la
+    //     pantalla de corrección φ − φᶜ y se resta tras el desenrollado.
+    let (phase_bias_report, bias_screen) = match &config.phase_bias {
+        Some(pb_config) => match config.phase_bias_stage {
+            PhaseBiasStage::BeforeUnwrap => {
+                (Some(phase_bias::correct_phase_bias(&mut stack, pb_config)?), None)
+            }
+            PhaseBiasStage::AfterUnwrap => {
+                let mut corrected = stack.clone();
+                let report = phase_bias::correct_phase_bias(&mut corrected, pb_config)?;
+                let screen = ndarray::Zip::from(&stack.data)
+                    .and(&corrected.data)
+                    .map_collect(|zb, zc| {
+                        if zb.norm() > 0.0 && zc.norm() > 0.0 { (zb * zc.conj()).arg() } else { 0.0 }
+                    });
+                (Some(report), Some(screen))
+            }
+        },
+        None => (None, None),
     };
 
     // 3) Desenrollado con la coherencia como calidad (+ umbral opcional).
@@ -274,6 +308,17 @@ pub fn run_sbas(config: &SbasPipelineConfig) -> Result<SbasProducts> {
             unwrap::snaphu::unwrap_stack_snaphu(&stack, coherence.as_ref(), snaphu_config)?
         }
     };
+
+    // 3b) Corrección de phase bias después del desenrollado: la pantalla es
+    //     pequeña (|aₙ·Σδ̂| ≪ π en casi todo píxel), así que restarla no
+    //     requiere re-desenrollar.
+    if let Some(screen) = &bias_screen {
+        ndarray::Zip::from(&mut unwrapped.data).and(screen).for_each(|u, &s| {
+            if u.is_finite() {
+                *u -= s;
+            }
+        });
+    }
 
     // 4) Corrección de errores de desenrollado por cierre de fase + QC.
     let (unwrap_report, closure_qc) = if config.correct_unwrap {
