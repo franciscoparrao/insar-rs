@@ -1,5 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="180mm" height="78mm" viewBox="0 0 1440 624" font-family="Liberation Sans, Arial, Helvetica, sans-serif">
+<!-- Fig. 1 del paper #1 (v4, 2026-10-07): pipeline de insar-rs con la
+     corrección de phase bias en dos pasos — estimación sobre la fase
+     envuelta y resta después del desenrollado (PhaseBiasStage::AfterUnwrap).
+     Sin resultados dentro del diagrama (review blind b2).
+     Exportar: inkscape fig_workflow.svg -o fig_workflow.pdf -->
+<svg xmlns="http://www.w3.org/2000/svg" width="180mm" height="65mm" viewBox="0 0 1440 520" font-family="Liberation Sans, Arial, Helvetica, sans-serif">
   <defs>
     <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M 0 1 L 9 5 L 0 9 z" fill="#24303a"/>
@@ -9,88 +14,88 @@
     </marker>
   </defs>
 
-  <!-- ═══ Row 0: inputs ═══ -->
-  <g font-size="21" fill="#24303a">
-    <rect x="30" y="30" width="200" height="88" rx="10" fill="#f4f6f7" stroke="#24303a" stroke-width="1.6"/>
-    <text x="130" y="66" text-anchor="middle" font-weight="bold">Inputs</text>
-    <text x="130" y="94" text-anchor="middle" font-size="18">ISCE · LiCSAR · HyP3</text>
+  <!-- ═══ Fila A: entrada y estimación del sesgo (fase envuelta) ═══ -->
+  <g font-size="20" fill="#24303a">
+    <rect x="16" y="36" width="246" height="96" rx="10" fill="#f4f6f7" stroke="#24303a" stroke-width="1.6"/>
+    <text x="139" y="76" text-anchor="middle" font-weight="bold" font-size="24">Inputs</text>
+    <text x="139" y="106" text-anchor="middle">ISCE · LiCSAR · HyP3</text>
 
-    <rect x="300" y="30" width="240" height="88" rx="10" fill="#eef3f8" stroke="#0072B2" stroke-width="1.6"/>
-    <text x="420" y="66" text-anchor="middle" font-weight="bold" fill="#0072B2">Wrapped stack</text>
-    <text x="420" y="94" text-anchor="middle" font-size="18">complex IfgStack (e<tspan baseline-shift="super" font-size="13">iφ</tspan>)</text>
+    <rect x="290" y="36" width="260" height="96" rx="10" fill="#eef3f8" stroke="#0072B2" stroke-width="1.6"/>
+    <text x="420" y="76" text-anchor="middle" font-weight="bold" font-size="24" fill="#0072B2">Wrapped stack</text>
+    <text x="420" y="106" text-anchor="middle">complex phasors e<tspan baseline-shift="super" font-size="14">iφ</tspan></text>
 
-    <!-- contribution box -->
-    <rect x="610" y="16" width="380" height="116" rx="12" fill="#fdf1e7" stroke="#D55E00" stroke-width="3"/>
-    <text x="800" y="52" text-anchor="middle" font-weight="bold" font-size="23" fill="#D55E00">Phase-bias correction</text>
-    <text x="800" y="80" text-anchor="middle" font-size="18">estimate a₂…aₘ from ~1-yr anchor pairs</text>
-    <text x="800" y="104" text-anchor="middle" font-size="18">per-pixel LS on wrapped closures → subtract bias</text>
-    <text x="990" y="10" text-anchor="end" font-size="16" font-style="italic" fill="#D55E00">this work</text>
-
-    <rect x="1060" y="30" width="170" height="88" rx="10" fill="#f4f6f7" stroke="#24303a" stroke-width="1.6"/>
-    <text x="1145" y="66" text-anchor="middle" font-weight="bold">Unwrap</text>
-    <text x="1145" y="94" text-anchor="middle" font-size="18">quality-guided</text>
-
-    <rect x="1290" y="30" width="130" height="88" rx="10" fill="#f4f6f7" stroke="#24303a" stroke-width="1.6"/>
-    <text x="1355" y="66" text-anchor="middle" font-weight="bold">2π-jump</text>
-    <text x="1355" y="94" text-anchor="middle" font-size="18">correction</text>
+    <rect x="600" y="20" width="440" height="128" rx="12" fill="#fdf1e7" stroke="#D55E00" stroke-width="3"/>
+    <text x="820" y="56" text-anchor="middle" font-weight="bold" font-size="24" fill="#D55E00">Bias-term estimation</text>
+    <text x="820" y="84" text-anchor="middle">wrapped closure phases, spans 2–3</text>
+    <text x="820" y="110" text-anchor="middle">outlier masking · per-pixel LS → bias terms δ</text>
+    <text x="820" y="136" text-anchor="middle" font-size="18" fill="#5a6670">a₂, a₃ from bias-free anchors or literature</text>
   </g>
 
-  <!-- QC callout under contribution box -->
-  <g font-size="18" fill="#009E73">
-    <path d="M 800 132 L 800 176" stroke="#009E73" stroke-width="1.6" stroke-dasharray="5 4" fill="none"/>
-    <rect x="560" y="176" width="480" height="64" rx="10" fill="none" stroke="#009E73" stroke-width="1.6" stroke-dasharray="5 4"/>
-    <text x="800" y="202" text-anchor="middle" font-weight="bold">QC: systematic (mean) closure phase</text>
-    <text x="800" y="226" text-anchor="middle">wrapped domain, held-out evaluation (−66 to −84% Ñuble)</text>
+  <!-- QC (dominio envuelto), sin cifras -->
+  <g font-size="19" fill="#009E73">
+    <path d="M 1040 84 L 1100 84" stroke="#009E73" stroke-width="1.6" stroke-dasharray="5 4" fill="none"/>
+    <rect x="1100" y="36" width="320" height="100" rx="10" fill="none" stroke="#009E73" stroke-width="1.6" stroke-dasharray="5 4"/>
+    <text x="1260" y="74" text-anchor="middle" font-weight="bold" font-size="21">QC</text>
+    <text x="1260" y="102" text-anchor="middle">held-out mean closure per span</text>
+    <text x="1260" y="124" text-anchor="middle" font-size="17">(wrapped domain)</text>
   </g>
 
-  <!-- Row 0 arrows -->
-  <g stroke="#24303a" stroke-width="2" fill="none">
-    <path d="M 230 74 L 292 74" marker-end="url(#arr)"/>
-    <path d="M 540 74 L 602 74" stroke="#D55E00" marker-end="url(#arrAcc)"/>
-    <path d="M 990 74 L 1052 74" stroke="#D55E00" marker-end="url(#arrAcc)"/>
-    <path d="M 1230 74 L 1282 74" marker-end="url(#arr)"/>
+  <!-- ═══ Fila B: desenrollado y resta de la corrección ═══ -->
+  <g font-size="20" fill="#24303a">
+    <rect x="290" y="220" width="260" height="96" rx="10" fill="#f4f6f7" stroke="#24303a" stroke-width="1.6"/>
+    <text x="420" y="260" text-anchor="middle" font-weight="bold" font-size="24">Unwrap</text>
+    <text x="420" y="290" text-anchor="middle">SNAPHU · quality-guided</text>
+
+    <rect x="600" y="220" width="440" height="96" rx="12" fill="#fdf1e7" stroke="#D55E00" stroke-width="3"/>
+    <text x="820" y="260" text-anchor="middle" font-weight="bold" font-size="24" fill="#D55E00">Bias correction</text>
+    <text x="820" y="290" text-anchor="middle">subtract aₙΣδ from the unwrapped phase</text>
+
+    <rect x="1100" y="220" width="150" height="96" rx="10" fill="#f4f6f7" stroke="#24303a" stroke-width="1.6"/>
+    <text x="1175" y="260" text-anchor="middle" font-weight="bold" font-size="24">2π-jump</text>
+    <text x="1175" y="290" text-anchor="middle">correction</text>
+
+    <rect x="1290" y="220" width="130" height="96" rx="10" fill="#f4f6f7" stroke="#24303a" stroke-width="1.6"/>
+    <text x="1355" y="260" text-anchor="middle" font-weight="bold" font-size="24">Reference</text>
+    <text x="1355" y="290" text-anchor="middle">pixel / region</text>
   </g>
 
-  <!-- connector down: 2π-jump → reference -->
-  <path d="M 1355 118 L 1355 300 L 1238 300" stroke="#24303a" stroke-width="2" fill="none" marker-end="url(#arr)"/>
+  <!-- ═══ Fila C: inversión y salidas (de derecha a izquierda) ═══ -->
+  <g font-size="20" fill="#24303a">
+    <rect x="1180" y="400" width="240" height="96" rx="10" fill="#f4f6f7" stroke="#24303a" stroke-width="1.6"/>
+    <text x="1300" y="440" text-anchor="middle" font-weight="bold" font-size="24">SBAS inversion</text>
+    <text x="1300" y="470" text-anchor="middle">OLS · WLS · robust L1</text>
 
-  <!-- ═══ Row 1 (right → left) ═══ -->
-  <g font-size="21" fill="#24303a">
-    <rect x="1040" y="256" width="190" height="88" rx="10" fill="#f4f6f7" stroke="#24303a" stroke-width="1.6"/>
-    <text x="1135" y="292" text-anchor="middle" font-weight="bold">Reference</text>
-    <text x="1135" y="320" text-anchor="middle" font-size="18">stable pixel / AOI</text>
+    <rect x="880" y="400" width="240" height="96" rx="10" fill="#f4f6f7" stroke="#24303a" stroke-width="1.6"/>
+    <text x="1000" y="440" text-anchor="middle" font-weight="bold" font-size="24">Corrections</text>
+    <text x="1000" y="470" text-anchor="middle">APS · GACOS · deramp</text>
 
-    <rect x="720" y="256" width="250" height="88" rx="10" fill="#f4f6f7" stroke="#24303a" stroke-width="1.6"/>
-    <text x="845" y="292" text-anchor="middle" font-weight="bold">SBAS inversion</text>
-    <text x="845" y="320" text-anchor="middle" font-size="18">OLS · WLS · L1-IRLS</text>
+    <rect x="580" y="400" width="260" height="96" rx="10" fill="#eef3f8" stroke="#0072B2" stroke-width="1.6"/>
+    <text x="710" y="440" text-anchor="middle" font-weight="bold" font-size="24" fill="#0072B2">Time series</text>
+    <text x="710" y="470" text-anchor="middle">displacement · velocity</text>
 
-    <rect x="420" y="256" width="230" height="88" rx="10" fill="#f4f6f7" stroke="#24303a" stroke-width="1.6"/>
-    <text x="535" y="292" text-anchor="middle" font-weight="bold">Corrections</text>
-    <text x="535" y="320" text-anchor="middle" font-size="18">APS / GACOS · deramp</text>
-
-    <rect x="120" y="256" width="230" height="88" rx="10" fill="#eef3f8" stroke="#0072B2" stroke-width="1.6"/>
-    <text x="235" y="292" text-anchor="middle" font-weight="bold" fill="#0072B2">Time series</text>
-    <text x="235" y="320" text-anchor="middle" font-size="18">displacement · velocity</text>
+    <rect x="290" y="400" width="240" height="96" rx="10" fill="#f4f6f7" stroke="#24303a" stroke-width="1.6"/>
+    <text x="410" y="440" text-anchor="middle" font-weight="bold" font-size="24">Outputs</text>
+    <text x="410" y="470" text-anchor="middle">GeoTIFF · Python</text>
   </g>
 
-  <!-- Row 1 arrows (right to left) -->
-  <g stroke="#24303a" stroke-width="2" fill="none">
-    <path d="M 1040 300 L 978 300" marker-end="url(#arr)"/>
-    <path d="M 720 300 L 658 300" marker-end="url(#arr)"/>
-    <path d="M 420 300 L 358 300" marker-end="url(#arr)"/>
+  <!-- ═══ Flechas ═══ -->
+  <g stroke="#24303a" stroke-width="2" fill="none" marker-end="url(#arr)">
+    <path d="M 262 84 L 286 84"/>
+    <path d="M 420 132 L 420 216"/>
+    <path d="M 550 268 L 596 268"/>
+    <path d="M 1040 268 L 1096 268"/>
+    <path d="M 1250 268 L 1286 268"/>
+    <path d="M 1355 316 L 1355 396"/>
+    <path d="M 1180 448 L 1124 448"/>
+    <path d="M 880 448 L 844 448"/>
+    <path d="M 580 448 L 534 448"/>
   </g>
-
-  <!-- ═══ Row 2: outputs ═══ -->
-  <path d="M 235 344 L 235 400" stroke="#24303a" stroke-width="2" fill="none" marker-end="url(#arr)"/>
-  <g font-size="21" fill="#24303a">
-    <rect x="80" y="404" width="310" height="88" rx="10" fill="#f4f6f7" stroke="#24303a" stroke-width="1.6"/>
-    <text x="235" y="440" text-anchor="middle" font-weight="bold">Outputs</text>
-    <text x="235" y="468" text-anchor="middle" font-size="18">GeoTIFF (native writer) · f32 · PyO3</text>
+  <g stroke="#D55E00" stroke-width="2.4" fill="none" marker-end="url(#arrAcc)">
+    <path d="M 550 84 L 596 84"/>
+    <path d="M 820 148 L 820 216"/>
   </g>
-
-  <!-- ═══ Footer: engine properties ═══ -->
-  <g font-size="18" fill="#5a6a75">
-    <text x="720" y="560" text-anchor="middle">single static binary (3.5 MB) · no Python/GDAL in the core · Rayon parallelism · 230+ unit tests</text>
-    <text x="720" y="588" text-anchor="middle">numerical parity with MintPy: r = 1.000000 (Fernandina benchmark)</text>
+  <g font-size="17" font-style="italic">
+    <text x="428" y="180" fill="#5a6670">uncorrected</text>
+    <text x="830" y="188" fill="#D55E00">δ</text>
   </g>
 </svg>
