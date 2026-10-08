@@ -24,3 +24,4 @@ __pycache__/
 /validation/phase_bias_export
 /SAFE_files.txt
 /docs/phase_bias/figs/*_preview.png
+validation/bench_out/
