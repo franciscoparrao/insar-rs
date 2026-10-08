@@ -70,8 +70,7 @@ pub fn build_closure_loops(pairs: &[IfgPair]) -> ClosureLoops {
                 continue;
             };
             for &c in epochs.iter().skip(ib + 1) {
-                let (Some(&idx_bc), Some(&idx_ac)) =
-                    (index.get(&(b, c)), index.get(&(a, c)))
+                let (Some(&idx_bc), Some(&idx_ac)) = (index.get(&(b, c)), index.get(&(a, c)))
                 else {
                     continue;
                 };
@@ -111,30 +110,33 @@ pub fn nonzero_closure_count(stack: &UnwrappedStack) -> Result<Array2<f32>> {
 
     let mut out = Array2::<f32>::from_elem((n_rows, n_cols), f32::NAN);
     let mut row_views: Vec<_> = out.axis_iter_mut(Axis(0)).collect();
-    row_views.par_iter_mut().enumerate().for_each(|(r, out_row)| {
-        let mut phi = vec![0.0_f64; n_pairs];
-        let mut finite = vec![false; n_pairs];
-        for c in 0..n_cols {
-            for k in 0..n_pairs {
-                let v = phases[[k, r, c]];
-                finite[k] = v.is_finite();
-                phi[k] = if finite[k] { v as f64 } else { 0.0 };
-            }
-            let mut active = 0usize;
-            let mut nonzero = 0usize;
-            for &[ab, bc, ac] in loops {
-                if finite[ab] && finite[bc] && finite[ac] {
-                    active += 1;
-                    if ((phi[ab] + phi[bc] - phi[ac]) / TWO_PI).round() != 0.0 {
-                        nonzero += 1;
+    row_views
+        .par_iter_mut()
+        .enumerate()
+        .for_each(|(r, out_row)| {
+            let mut phi = vec![0.0_f64; n_pairs];
+            let mut finite = vec![false; n_pairs];
+            for c in 0..n_cols {
+                for k in 0..n_pairs {
+                    let v = phases[[k, r, c]];
+                    finite[k] = v.is_finite();
+                    phi[k] = if finite[k] { v as f64 } else { 0.0 };
+                }
+                let mut active = 0usize;
+                let mut nonzero = 0usize;
+                for &[ab, bc, ac] in loops {
+                    if finite[ab] && finite[bc] && finite[ac] {
+                        active += 1;
+                        if ((phi[ab] + phi[bc] - phi[ac]) / TWO_PI).round() != 0.0 {
+                            nonzero += 1;
+                        }
                     }
                 }
+                if active > 0 {
+                    out_row[c] = nonzero as f32;
+                }
             }
-            if active > 0 {
-                out_row[c] = nonzero as f32;
-            }
-        }
-    });
+        });
 
     Ok(out)
 }
@@ -357,13 +359,16 @@ pub fn correct_unwrap_errors(stack: &mut UnwrappedStack) -> Result<UnwrapCorrect
         })
         .reduce(|| (0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
 
-    Ok(UnwrapCorrectionReport { corrected, detected_uncorrected })
+    Ok(UnwrapCorrectionReport {
+        corrected,
+        detected_uncorrected,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{Epoch, StackMeta, UnwrappedStack, SENTINEL1_WAVELENGTH_M};
+    use crate::types::{Epoch, SENTINEL1_WAVELENGTH_M, StackMeta, UnwrappedStack};
     use ndarray::Array3;
     use surtgis_core::GeoTransform;
 
@@ -385,7 +390,11 @@ mod tests {
     }
 
     fn pair(i: usize, j: usize) -> IfgPair {
-        IfgPair { reference: i, secondary: j, perp_baseline_m: 0.0 }
+        IfgPair {
+            reference: i,
+            secondary: j,
+            perp_baseline_m: 0.0,
+        }
     }
 
     // ---------- build_closure_loops ----------
@@ -439,7 +448,12 @@ mod tests {
             data.index_axis_mut(Axis(0), k)
                 .fill(POT[p.secondary] - POT[p.reference]);
         }
-        UnwrappedStack { data, epochs: epochs(4), pairs, meta: meta() }
+        UnwrappedStack {
+            data,
+            epochs: epochs(4),
+            pairs,
+            meta: meta(),
+        }
     }
 
     #[test]
@@ -456,7 +470,10 @@ mod tests {
         stack.data[[0, 1, 2]] += TWO_PI as f32;
 
         let rep = correct_unwrap_errors(&mut stack).unwrap();
-        assert_eq!(rep.corrected, 2, "deberían corregirse exactamente 2 píxeles");
+        assert_eq!(
+            rep.corrected, 2,
+            "deberían corregirse exactamente 2 píxeles"
+        );
         assert_eq!(rep.detected_uncorrected, 0);
 
         // Los pares inyectados recuperan su valor original.
@@ -543,8 +560,12 @@ mod tests {
             data.index_axis_mut(Axis(0), k)
                 .fill(POT[p.secondary] - POT[p.reference]);
         }
-        let mut stack =
-            UnwrappedStack { data, epochs: epochs(3), pairs, meta: meta() };
+        let mut stack = UnwrappedStack {
+            data,
+            epochs: epochs(3),
+            pairs,
+            meta: meta(),
+        };
         stack.data[[0, 0, 0]] += TWO_PI as f32; // salto en el par (0,1)
         let orig = stack.data.clone();
 

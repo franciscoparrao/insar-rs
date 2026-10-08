@@ -45,7 +45,10 @@ pub enum InsarError {
 impl InsarError {
     /// Construye un [`InsarError::Io`] con el path que causó el error.
     pub fn io(path: impl AsRef<Path>, source: std::io::Error) -> Self {
-        InsarError::Io { path: path.as_ref().to_path_buf(), source }
+        InsarError::Io {
+            path: path.as_ref().to_path_buf(),
+            source,
+        }
     }
 }
 

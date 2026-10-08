@@ -5,6 +5,198 @@ versionado: [SemVer](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-10-08
+
+Resumen: corrección nativa del sesgo de fase de no-cierre (phase bias)
+integrada al pipeline, lector de productos LiCSAR, corrección troposférica
+GACOS end-to-end y paridad con MintPy re-certificada con las convenciones
+alineadas. Sin cambios incompatibles para quien no configura `phase_bias`.
+
+**Cambio de comportamiento a notar:** con `phase_bias` configurado, el default
+de `SbasPipelineConfig::phase_bias_stage` es `PhaseBiasStage::AfterUnwrap`.
+Para recuperar el comportamiento previo a esta versión, fijar
+`phase_bias_stage: PhaseBiasStage::BeforeUnwrap`.
+
+### Added
+
+- `io::licsar`: `read_licsar_stack` lee productos LiCSAR/COMET (GEOC, fase
+  envuelta `geo.diff_unfiltered_pha.tif`) a un `IfgStack` con recorte por AOI
+  y rango de fechas, y descubre la red (redes incompletas válidas).
+  `read_licsar_coherence` lee `geo.cc.tif` alineado con el stack. Sin GDAL.
+- `pipeline::PhaseBiasStage` (`AfterUnwrap` por defecto, `BeforeUnwrap`):
+  decide sobre qué fase se resta la corrección; la estimación usa siempre los
+  cierres envueltos. Con `AfterUnwrap` el desenrollado no ve la corrección y
+  no puede cambiar la solución entera (en Ñuble, corregir antes introducía
+  cambios de ciclo en vegetación).
+- `PhaseBiasConfig::outlier_sigma` (default `Some(2.0)`): enmascarado robusto
+  de cierres atípicos por píxel y span (Maghsoudi et al. 2025, §2.1).
+- `phase_bias::estimate_bias_terms` (términos δ̂ por par y píxel, para
+  validación out-of-sample) y `phase_bias::closure_rms_map` (RMS de cierre
+  por píxel).
+- Scripts de validación reproducibles: `validation/bench_fernandina.sh`
+  (benchmark vs MintPy, 5 repeticiones, hilos igualados) y
+  `validation/make_figure_parity.py` (paridad con convenciones alineadas).
+
+### Fixed
+
+- `inversion::select_reference_pixel` descarta píxeles con coherencia
+  saturada (≥ 0.999 en la mayoría de los pares), que en LiCSAR pueden tener
+  fase aleatoria.
+- `unwrap::snaphu`: coherencia no finita → 0 antes de invocar `snaphu` (antes
+  abortaba con la coherencia LiCSAR).
+- `CoefficientEstimate::anchor_days` reporta el lapso real de las anclas
+  usadas, no la mediana de toda la serie.
+
+### Changed
+
+- Paridad con MintPy (Fernandina) re-certificada con MintPy 1.6.3: serie
+  RMSE 0.034 µm y velocidad RMSE 0.013 µm/año, alineando dos convenciones de
+  MintPy (fase referenciada == 0 como dato faltante y eje de tiempo en año
+  decimal). Detalle en `docs/validation.md`.
+- Solo `insar-core` se publica en crates.io (`publish = false` en
+  `insar-cli` e `insar-python`); `surtgis-core` 1.5.2.
+- `cargo fmt` aplicado a todo el workspace; clippy limpio con `-D warnings`.
+
+### Detalle: corrección de phase bias
+
+Nuevo módulo `phase_bias` e integración como paso 3 de `run_sbas`
+(`SbasPipelineConfig::phase_bias`, `SbasProducts::phase_bias_report`).
+Implementa la corrección empírica de Maghsoudi et al. (2022), RSE 275:113022
+(Eqs. 2–13) **dentro del pipeline nativo**, no como post-proceso externo.
+
+Corrige el sesgo sistemático que el multilooking introduce en los
+interferogramas cortos (la *fading signal*): mayor cuanto más corto el par y
+más decorrelaciona el terreno, y que en una cadena SBAS se acumula hasta
+producir velocidades sesgadas — imita subsidencia en cultivo y bosque.
+
+**No es lo que hacía `unwrap_error`**, y conviene que quede escrito porque los
+dos módulos usan la misma palabra "cierre": `unwrap_error` resuelve saltos
+**enteros** de 2π (Yunjun et al. 2019) sobre fase desenrollada; `phase_bias`
+resuelve la parte **fraccional** del cierre —justo lo que el otro redondea a
+cero y descarta— y la estima sobre fase **envuelta**. Son ortogonales. La
+corrección de phase bias se resta por defecto a la fase ya desenrollada
+(`PhaseBiasStage::AfterUnwrap`); la corrección de errores de desenrollado va
+después. El doc del módulo lleva la tabla comparativa.
+
+Que la estimación trabaje sobre fase envuelta —cierres calculados como
+argumento del producto complejo, no restando fases desenrolladas— es lo que
+hace la corrección barata: no necesita desenrollar, ni *phase linking*, ni
+interferogramas largos coherentes salvo un ancla para los coeficientes.
+
+Generalizaciones sobre el paper, que está escrito para muestreo regular de
+6 días y span máximo 3:
+
+- **Span arbitrario `M`** indexado por **orden de época**, no por días de
+  calendario. Es la generalización correcta a muestreo irregular y coincide con
+  lo que el paper hace de facto ("interferograms that connect each epoch i to
+  the three or four nearest acquisitions in time"). La fila del diseño lleva
+  `(aₙ−1)` en las n columnas de la cadena, que recupera la Eq. (10) para M=3.
+- **Coeficientes estimados de los datos** (`estimate_coefficients`) en vez de
+  reusar los 0,47 / 0,31 publicados: el paper muestra que dependen de la
+  cobertura del suelo, así que son específicos de escena. Se estiman como
+  **cociente de acumulados** y no como media de los cocientes por píxel que
+  calcula el paper — los mapas por píxel son ruidosos (el propio paper lo dice,
+  Fig. 8) y su cociente explota donde el denominador cruza cero, así que la
+  media muestral no es estimador estable de la razón.
+- **Red incompleta**: un par unitario faltante no solo elimina su incógnita,
+  invalida toda observación que lo cruce (la Eq. 2 necesita su fase para formar
+  el cierre). La topología lo maneja explícitamente.
+
+Productos adicionales: `closure_rms` (QC antes/después), `cumulative_bias`
+(firma temporal del sesgo, Fig. 4 del paper) y `high_closure_mask`.
+
+**Hardening anti no-op silencioso**, siguiendo la doctrina de GACOS. Son
+errores duros, no reportes que nadie mira:
+
+- `max_span = 2` **nunca** determina el sistema: N−2 observaciones para N−1
+  incógnitas, sea cual sea N. Hacen falta dos longitudes de par largo distintas
+  (spans 2 y 3) para cerrarlo. Sin este chequeo, una red de solo consecutivos y
+  saltos de 2 devolvía éxito con el stack intacto.
+- Cero píxeles corregidos al terminar.
+- Escena sin sesgo medible: el denominador de las Eqs. 8–9 es el sesgo
+  acumulado, y si es ~0 los coeficientes son un cociente de ruidos. El umbral
+  es por píxel y en radianes — compararlo contra una escala derivada de las
+  propias sumas sería circular, porque el denominador suele ser la mayor de
+  ellas y la prueba pasaría siempre.
+- Coeficiente fuera de rango físico (el modelo dice que el sesgo decae con el
+  largo del par: 0 < aₙ < 1).
+- Sin par ancla teselable para estimar coeficientes.
+
+Píxeles cuyo sistema reducido queda rank-deficiente se dejan **intactos** y se
+cuentan en `pixels_skipped`: no se les aplica la solución de norma mínima, que
+repartiría el cierre en fracciones arbitrarias entre incógnitas que las
+observaciones no restringen.
+
+15 tests unitarios (topología y observaciones 2N−5, par unitario faltante,
+recuperación exacta de los coeficientes verdaderos, escena sin sesgo, sin
+ancla, recuperación del sesgo inyectado dejando la deformación intacta, caída
+del RMS de cierre, stack sin sesgo no se toca, píxel inválido intacto,
+preservación de la amplitud —la corrección es una rotación compleja—, red de
+span 2 indeterminada, sesgo acumulado, máscara de cierre alto) más un test
+**end-to-end del pipeline** (`tests/phase_bias_e2e.rs`) que es la prueba del
+argumento: sobre un stack sintético de 10 épocas con sesgo de 0,15 rad por par
+de 12 días, la velocidad sale sesgada en **8,6 mm/año** (43 % de la señal
+verdadera de −20 mm/año) y la corrección la devuelve a 0,00 mm/año de error,
+con el RMS de cierre cayendo de 0,242 a 1,1e−8 rad.
+
+Limitación conocida: el camino `run_sbas_isce` lee `.unw` ya desenrollados, así
+que la corrección **no aplica** ahí — requiere fase envuelta.
+
+### Detalle: corrección troposférica GACOS (P0.2 del roadmap de datos abiertos)
+
+Nuevo módulo `troposphere::gacos` y subcomando `insar tropo-gacos`. Es la
+**primera vía troposférica del motor operable end-to-end**: lee los pares
+`YYYYMMDD.ztd` + `.ztd.rsc` tal como los entrega el servicio GACOS, los
+remuestrea bilinealmente a la grilla de la serie, proyecta a LOS por la secante
+de la incidencia y aplica el diferencial. Sin credenciales, sin dependencias
+nuevas y sin resolver perfiles atmosféricos fuera del motor.
+
+Contraste con `troposphere::era5` (G-7), que mantiene abierto el gap A-9 (no
+descarga ni remuestrea horizontalmente): además de operabilidad, GACOS gana en
+resolución para AOIs chicos — ERA5 tiene celdas de ~31 km, de modo que un AOI de
+~10 km cae dentro de una sola celda y el reanálisis no puede resolver ningún
+gradiente topo-correlacionado *dentro* del AOI; GACOS entrega ZTD a **~90 m**
+(0,000833°, interpolado con SRTM; el paso real siempre se lee del `.rsc`).
+
+La corrección de serie hace **streaming**: carga, remuestrea y libera un mapa a
+la vez — nunca materializa los N mapas simultáneamente (a 90 m, un frame
+continental son cientos de MB por época; el camino ingenuo escala a GBs).
+`load_for_epochs` queda como building block explícitamente marcado con esa
+advertencia. La época de referencia se salta (su corrección es idénticamente 0)
+y las métricas del reporte quedan definidas sobre las épocas no-referencia.
+
+Incluye **referenciado espacial**, que `era5` no hace: una serie InSAR está
+referenciada en tiempo *y* en espacio, así que la corrección aplica el doble
+diferencial `(D[e,p] − D[e₀,p]) − (D[e,p_ref] − D[e₀,p_ref])`. Omitirlo
+introduce un offset uniforme espurio cuando la serie sí fue referenciada a un
+píxel.
+
+Queda documentada además una **trampa metodológica**: si el objetivo científico
+es testear una relación entre la señal y la elevación, `correct_topo_correlated`
+no sirve como corrección previa — al ajustar y remover una pendiente
+fase-elevación global deja residuos de signo arbitrario por subregión y vuelve
+circular ese test. La tabla de "cuál usar" está en el doc del módulo.
+
+**Hardening anti no-op silencioso** (auditoría 2026-08-01): los estados que
+convertían la corrección en un passthrough con exit 0 — época de referencia sin
+mapa GACOS, píxel de referencia fuera de la cobertura, o cero píxeles
+corregidos al terminar — ahora son **errores duros** con mensaje accionable, y
+las épocas con mapa pero sin retardo finito en el píxel de referencia se
+reportan en `GacosReport::epochs_skipped` en vez de saltarse en silencio.
+Verificado end-to-end: los dos gatillos reproducidos contra el binario pasan de
+"escrito: serie corregida (cobertura 0.0 %)" a exit 1.
+
+15 tests unitarios (parseo `.rsc`, binario de tamaño inconsistente, remuestreo
+identidad incluyendo bordes, remuestreo grueso→fino exacto en campo lineal —el
+camino de producción—, no-extrapolación fuera de cobertura, diferencial
+temporal, referenciado espacial, época faltante, única época corregible sin
+mapa, directorio vacío, proyección a LOS, y los 4 del hardening: referencia sin
+mapa, refpixel fuera de cobertura, época saltada reportada, serie toda-NaN) más
+verificación end-to-end por CLI
+sobre una serie sintética con retardo espurio en columna: recupera la
+deformación verdadera exacta (−10,00 y −20,00 mm) y anula el gradiente espurio
+(49,33 mm → 0,000 mm).
+
 ## [0.2.0] — 2026-07-17
 
 Primer release publicado a crates.io/PyPI. Reúne el trabajo del backlog v0.2

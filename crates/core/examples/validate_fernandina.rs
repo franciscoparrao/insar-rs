@@ -41,7 +41,12 @@ fn read_f32_le(path: &Path, n: usize) -> Vec<f32> {
         .unwrap_or_else(|e| panic!("abrir {}: {e}", path.display()))
         .read_to_end(&mut bytes)
         .unwrap();
-    assert_eq!(bytes.len(), n * 4, "tamaño inesperado de {}", path.display());
+    assert_eq!(
+        bytes.len(),
+        n * 4,
+        "tamaño inesperado de {}",
+        path.display()
+    );
     bytes
         .chunks_exact(4)
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
@@ -57,7 +62,9 @@ fn write_f32_le(path: &Path, data: &[f32]) {
 }
 
 fn main() {
-    let dir = std::env::args().nth(1).unwrap_or_else(|| "validation/export".into());
+    let dir = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "validation/export".into());
     let dir = Path::new(&dir);
 
     let meta: Meta = serde_json::from_str(&fs::read_to_string(dir.join("meta.json")).unwrap())
@@ -69,8 +76,8 @@ fn main() {
 
     let n = meta.n_pairs * meta.rows * meta.cols;
     let phase = read_f32_le(&dir.join("phase.f32"), n);
-    let data = Array3::from_shape_vec((meta.n_pairs, meta.rows, meta.cols), phase)
-        .expect("reshape phase");
+    let data =
+        Array3::from_shape_vec((meta.n_pairs, meta.rows, meta.cols), phase).expect("reshape phase");
 
     let epochs: Vec<Epoch> = meta
         .epochs
@@ -113,7 +120,16 @@ fn main() {
     );
 
     // Serie: (épocas, filas, cols) C-order; velocidad: (filas, cols) C-order.
-    write_f32_le(&dir.join("insar_timeseries.f32"), series.data.as_slice().unwrap());
-    write_f32_le(&dir.join("insar_velocity.f32"), velocity.data.as_slice().unwrap());
-    println!("OK → insar_timeseries.f32 + insar_velocity.f32 en {}", dir.display());
+    write_f32_le(
+        &dir.join("insar_timeseries.f32"),
+        series.data.as_slice().unwrap(),
+    );
+    write_f32_le(
+        &dir.join("insar_velocity.f32"),
+        velocity.data.as_slice().unwrap(),
+    );
+    println!(
+        "OK → insar_timeseries.f32 + insar_velocity.f32 en {}",
+        dir.display()
+    );
 }

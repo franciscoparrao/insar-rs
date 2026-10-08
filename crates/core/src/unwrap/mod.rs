@@ -41,7 +41,11 @@ pub mod snaphu;
 /// backend [`snaphu::unwrap_stack_snaphu`].
 fn wrapped_phase_layer(stack: &IfgStack, k: usize) -> Array2<f32> {
     stack.data.index_axis(Axis(0), k).map(|z| {
-        if z.re.is_finite() && z.im.is_finite() { z.im.atan2(z.re) } else { f32::NAN }
+        if z.re.is_finite() && z.im.is_finite() {
+            z.im.atan2(z.re)
+        } else {
+            f32::NAN
+        }
     })
 }
 
@@ -135,9 +139,7 @@ pub fn unwrap_2d_min_quality(
             })
     };
     // Calidad efectiva: uniforme (1.0) si no hay mapa.
-    let qual = |r: usize, c: usize| -> f32 {
-        quality.map_or(1.0, |q| q[[r, c]])
-    };
+    let qual = |r: usize, c: usize| -> f32 { quality.map_or(1.0, |q| q[[r, c]]) };
 
     let mut unw = Array2::from_elem((rows, cols), f32::NAN);
     let mut visited = Array2::from_elem((rows, cols), false);
@@ -309,7 +311,7 @@ pub fn unwrap_stack_min_quality(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{Epoch, IfgPair, StackMeta, SENTINEL1_WAVELENGTH_M};
+    use crate::types::{Epoch, IfgPair, SENTINEL1_WAVELENGTH_M, StackMeta};
     use ndarray::Array2;
     use num_complex::Complex32;
     use std::f32::consts::PI;
@@ -392,9 +394,15 @@ mod tests {
         for i in -100..=100 {
             let x = 0.137 * i as f32;
             let w = wrap_diff(x);
-            assert!(w > -PI - 1e-5 && w <= PI + 1e-5, "fuera de rango: {x} -> {w}");
+            assert!(
+                w > -PI - 1e-5 && w <= PI + 1e-5,
+                "fuera de rango: {x} -> {w}"
+            );
             let k = ((x - w) / (2.0 * PI)).round();
-            assert!(((x - w) - k * 2.0 * PI).abs() < 1e-4, "no congruente: {x} -> {w}");
+            assert!(
+                ((x - w) - k * 2.0 * PI).abs() < 1e-4,
+                "no congruente: {x} -> {w}"
+            );
         }
     }
 
@@ -542,8 +550,16 @@ mod tests {
             data,
             epochs: epochs3(),
             pairs: vec![
-                IfgPair { reference: 0, secondary: 1, perp_baseline_m: 40.0 },
-                IfgPair { reference: 1, secondary: 2, perp_baseline_m: -25.0 },
+                IfgPair {
+                    reference: 0,
+                    secondary: 1,
+                    perp_baseline_m: 40.0,
+                },
+                IfgPair {
+                    reference: 1,
+                    secondary: 2,
+                    perp_baseline_m: -25.0,
+                },
             ],
             meta: meta(),
         };

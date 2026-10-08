@@ -17,7 +17,9 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let ifg_dir = args.next().expect("arg1: dir de interferogramas ISCE");
     let baselines = args.next();
-    let out = args.next().unwrap_or_else(|| "validation/export/insar_velocity_isce.f32".into());
+    let out = args
+        .next()
+        .unwrap_or_else(|| "validation/export/insar_velocity_isce.f32".into());
 
     let config = IsceLoadConfig {
         baselines_dir: baselines.map(PathBuf::from),
@@ -30,7 +32,11 @@ fn main() {
     let (rows, cols) = stack.dims();
     println!(
         "Leído (ISCE nativo): {} épocas, {} pares, {}×{} en {:.2}s",
-        stack.epochs.len(), stack.pairs.len(), rows, cols, read_s
+        stack.epochs.len(),
+        stack.pairs.len(),
+        rows,
+        cols,
+        read_s
     );
 
     let t1 = std::time::Instant::now();

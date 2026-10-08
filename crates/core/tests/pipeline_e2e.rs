@@ -34,11 +34,11 @@ use std::path::Path;
 
 use insar_core::atmosphere::ApsConfig;
 use insar_core::network::SbasConfig;
-use insar_core::pipeline::{run_sbas, SbasPipelineConfig};
+use insar_core::pipeline::{SbasPipelineConfig, run_sbas};
 use insar_core::types::SENTINEL1_WAVELENGTH_M;
 
 use surtgis_core::io::{read_geotiff, write_geotiff};
-use surtgis_core::{Raster, CRS, GeoTransform};
+use surtgis_core::{CRS, GeoTransform, Raster};
 
 // --- Parámetros del stack sintético (compartidos con el ejemplo) ---
 
@@ -116,7 +116,8 @@ fn generate_synthetic_stack(dir: &Path) {
         let mut im = vec![0.0f32; GRID * GRID];
         for r in 0..GRID {
             for c in 0..GRID {
-                let dd = displacement(&dates, r, c, secondary) - displacement(&dates, r, c, reference);
+                let dd =
+                    displacement(&dates, r, c, secondary) - displacement(&dates, r, c, reference);
                 let phi = -4.0 * PI / SENTINEL1_WAVELENGTH_M * dd;
                 let k = r * GRID + c;
                 re[k] = phi.cos() as f32;
@@ -226,7 +227,10 @@ fn run_e2e(base: &Path) {
     // Stack sintético consistente: la corrección de cierre no toca nada y la
     // coherencia temporal del ajuste es ~1 en el centro.
     let report = products.unwrap_report.expect("reporte de cierre presente");
-    assert_eq!(report.corrected, 0, "sintético consistente: sin correcciones");
+    assert_eq!(
+        report.corrected, 0,
+        "sintético consistente: sin correcciones"
+    );
     let center_gamma = products.temporal_coherence[[CENTER as usize, CENTER as usize]];
     assert!(center_gamma > 0.99, "γ_temp central = {center_gamma}");
     assert_eq!(

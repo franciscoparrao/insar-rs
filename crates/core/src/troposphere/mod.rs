@@ -12,9 +12,25 @@
 //! pendiente fase-elevación, pero solo se resta el término topográfico.
 //!
 //! Ver también [`era5`] (G-7): corrección estratificada por modelo físico
-//! (reanálisis) en vez de esta regresión empírica.
+//! (reanálisis) en vez de esta regresión empírica, y [`gacos`] (P0.2): mapas de
+//! retardo ya modelados y grillados — la única de las tres vías que es operable
+//! end-to-end sin resolver perfiles atmosféricos fuera del motor.
+//!
+//! ## Cuál usar
+//!
+//! | Vía | Resolución | Operable end-to-end | Cuándo |
+//! |---|---|---|---|
+//! | [`correct_topo_correlated`] | la del stack | sí | screening rápido |
+//! | [`gacos`] | ~90 m (0,000833°) | sí | por defecto cuando hay mapas GACOS |
+//! | [`era5`] | ~31 km | no (falta fetch + remuestreo horizontal) | solo si el AOI supera holgadamente una celda ERA5 |
+//!
+//! ⚠️ Si el objetivo científico es **testear** una relación entre la señal y la
+//! elevación, [`correct_topo_correlated`] no sirve como corrección previa: al
+//! ajustar y remover una pendiente fase-elevación global, deja residuos de
+//! signo arbitrario por subregión y vuelve circular ese test. Usar [`gacos`].
 
 pub mod era5;
+pub mod gacos;
 
 use nalgebra::{DMatrix, DVector};
 use ndarray::{Array2, Axis};
@@ -52,7 +68,9 @@ pub fn correct_topo_correlated(
         return Err(InsarError::DimensionMismatch("máscara vs datos".into()));
     }
     if degree != 1 && degree != 2 {
-        return Err(InsarError::Metadata(format!("degree {degree} inválido (1 o 2)")));
+        return Err(InsarError::Metadata(format!(
+            "degree {degree} inválido (1 o 2)"
+        )));
     }
 
     // Normaliza la elevación (centrada y escalada) para buen condicionamiento,
@@ -60,16 +78,16 @@ pub fn correct_topo_correlated(
     let mut hs: Vec<f64> = Vec::new();
     for r in 0..nr {
         for c in 0..nc {
-            if data[[r, c]].is_finite()
-                && dem[[r, c]].is_finite()
-                && mask.is_none_or(|m| m[[r, c]])
+            if data[[r, c]].is_finite() && dem[[r, c]].is_finite() && mask.is_none_or(|m| m[[r, c]])
             {
                 hs.push(dem[[r, c]] as f64);
             }
         }
     }
     if hs.is_empty() {
-        return Err(InsarError::Inversion("sin píxeles válidos para fase-elevación".into()));
+        return Err(InsarError::Inversion(
+            "sin píxeles válidos para fase-elevación".into(),
+        ));
     }
     let h_mean = hs.iter().sum::<f64>() / hs.len() as f64;
     let h_scale = hs
@@ -96,7 +114,12 @@ pub fn correct_topo_correlated(
         }
         b
     };
-    let norm_xy = |r: usize, c: usize| (c as f64 / (nc.max(2) - 1) as f64, r as f64 / (nr.max(2) - 1) as f64);
+    let norm_xy = |r: usize, c: usize| {
+        (
+            c as f64 / (nc.max(2) - 1) as f64,
+            r as f64 / (nr.max(2) - 1) as f64,
+        )
+    };
 
     // Sistema de mínimos cuadrados sobre los píxeles de ajuste.
     let mut rows: Vec<Vec<f64>> = Vec::new();
@@ -193,7 +216,10 @@ mod tests {
         let cov: f64 = hv.iter().zip(&dv).map(|(h, d)| (h - hm) * (d - dm)).sum();
         let vh: f64 = hv.iter().map(|h| (h - hm).powi(2)).sum();
         let slope = cov / vh;
-        assert!(slope.abs() < 1e-6, "pendiente fase-elevación residual {slope}");
+        assert!(
+            slope.abs() < 1e-6,
+            "pendiente fase-elevación residual {slope}"
+        );
     }
 
     #[test]
@@ -211,7 +237,11 @@ mod tests {
         correct_topo_correlated(&mut d, &h, None, 1, false).unwrap();
         let top = d.slice(ndarray::s![0..20, ..]).mean().unwrap();
         let bot = d.slice(ndarray::s![20..40, ..]).mean().unwrap();
-        assert!((top - bot).abs() > 2.0, "el escalón de deformación se perdió: {}", top - bot);
+        assert!(
+            (top - bot).abs() > 2.0,
+            "el escalón de deformación se perdió: {}",
+            top - bot
+        );
     }
 
     #[test]
@@ -224,8 +254,8 @@ mod tests {
             (0.5 * hh + 2.0 * hh * hh) as f32
         });
         correct_topo_correlated(&mut d, &h, None, 2, false).unwrap();
-        let rng = d.iter().cloned().fold(f32::MIN, f32::max)
-            - d.iter().cloned().fold(f32::MAX, f32::min);
+        let rng =
+            d.iter().cloned().fold(f32::MIN, f32::max) - d.iter().cloned().fold(f32::MAX, f32::min);
         assert!(rng < 1e-3, "residuo cuadrático {rng}");
     }
 

@@ -85,7 +85,11 @@ pub fn select_ps(dispersion: &Array2<f32>, threshold: f32) -> Vec<PsCandidate> {
     let mut candidates: Vec<PsCandidate> = dispersion
         .indexed_iter()
         .filter(|&(_, &d)| !d.is_nan() && d <= threshold)
-        .map(|((row, col), &d)| PsCandidate { row, col, amp_dispersion: d })
+        .map(|((row, col), &d)| PsCandidate {
+            row,
+            col,
+            amp_dispersion: d,
+        })
         .collect();
 
     // Sin NaN tras el filtro → total_cmp da un orden total estable.
@@ -122,7 +126,11 @@ mod tests {
 
     fn stack_from(data: Array3<f32>) -> AmplitudeStack {
         let n = data.shape()[0];
-        AmplitudeStack { data, epochs: epochs(n), meta: meta() }
+        AmplitudeStack {
+            data,
+            epochs: epochs(n),
+            meta: meta(),
+        }
     }
 
     #[test]
@@ -199,8 +207,10 @@ mod tests {
         // NaN excluido; 0.5 > umbral excluido; resto ordenado por D_A.
         let disp = array![[0.30, f32::NAN], [0.10, 0.50], [0.25, 0.40]];
         let ps = select_ps(&disp, 0.4);
-        let got: Vec<(usize, usize, f32)> =
-            ps.iter().map(|p| (p.row, p.col, p.amp_dispersion)).collect();
+        let got: Vec<(usize, usize, f32)> = ps
+            .iter()
+            .map(|p| (p.row, p.col, p.amp_dispersion))
+            .collect();
         assert_eq!(
             got,
             vec![(1, 0, 0.10), (2, 0, 0.25), (0, 0, 0.30), (2, 1, 0.40)]
@@ -227,9 +237,18 @@ mod tests {
         let data = Array3::from_shape_vec(
             (3, 2, 2),
             vec![
-                10.0, 1.0, 5.0, 0.0, // época 0
-                10.0, 2.0, f32::NAN, 0.0, // época 1
-                10.0, 3.0, 5.0, 0.0, // época 2
+                10.0,
+                1.0,
+                5.0,
+                0.0, // época 0
+                10.0,
+                2.0,
+                f32::NAN,
+                0.0, // época 1
+                10.0,
+                3.0,
+                5.0,
+                0.0, // época 2
             ],
         )
         .unwrap();

@@ -23,8 +23,8 @@ use serde::Deserialize;
 use surtgis_core::io::write_geotiff;
 use surtgis_core::{GeoTransform, Raster};
 
-use insar_core::decompose::{decompose_asc_desc, LosVector};
-use insar_core::postprocess::{remove_ramp, RampKind};
+use insar_core::decompose::{LosVector, decompose_asc_desc};
+use insar_core::postprocess::{RampKind, remove_ramp};
 use insar_core::troposphere::correct_topo_correlated;
 
 #[derive(Deserialize)]
@@ -62,11 +62,14 @@ fn read_f32(path: &Path, n: usize) -> Vec<f32> {
         .read_to_end(&mut b)
         .unwrap();
     assert_eq!(b.len(), n * 4, "tamaño inesperado {}", path.display());
-    b.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
+    b.chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect()
 }
 
 fn load(dir: &Path) -> (Meta, Vec<f32>) {
-    let meta: Meta = serde_json::from_str(&fs::read_to_string(dir.join("meta.json")).unwrap()).unwrap();
+    let meta: Meta =
+        serde_json::from_str(&fs::read_to_string(dir.join("meta.json")).unwrap()).unwrap();
     let los = read_f32(&dir.join("los.f32"), meta.rows * meta.cols);
     (meta, los)
 }
@@ -81,7 +84,10 @@ fn default_heading(label: &str) -> f64 {
 
 /// Lee `--clave valor` simple de los argumentos.
 fn arg(args: &[String], key: &str) -> Option<String> {
-    args.iter().position(|a| a == key).and_then(|i| args.get(i + 1)).cloned()
+    args.iter()
+        .position(|a| a == key)
+        .and_then(|i| args.get(i + 1))
+        .cloned()
 }
 fn argf(args: &[String], key: &str) -> Option<f64> {
     arg(args, key).map(|v| v.parse().unwrap())
@@ -93,8 +99,15 @@ fn geom(meta: &Meta, args: &[String], label: &str) -> LosVector {
         && argf(args, &format!("--head-{label}")).is_none()
         && let Some(v) = &meta.los_vector
     {
-        let g = LosVector { east: v.east, north: v.north, up: v.up };
-        println!("  {label}: ê directo del meta = (E {:.3}, N {:.3}, U {:.3})", g.east, g.north, g.up);
+        let g = LosVector {
+            east: v.east,
+            north: v.north,
+            up: v.up,
+        };
+        println!(
+            "  {label}: ê directo del meta = (E {:.3}, N {:.3}, U {:.3})",
+            g.east, g.north, g.up
+        );
         return g;
     }
     let inc = argf(args, &format!("--inc-{label}")).unwrap_or(meta.incidence_deg);
@@ -105,7 +118,10 @@ fn geom(meta: &Meta, args: &[String], label: &str) -> LosVector {
             default_heading(label)
         });
     let g = LosVector::from_incidence_heading(inc, head);
-    println!("  {label}: inc={inc:.1}° head={head:.1}° → ê=(E {:.3}, N {:.3}, U {:.3})", g.east, g.north, g.up);
+    println!(
+        "  {label}: inc={inc:.1}° head={head:.1}° → ê=(E {:.3}, N {:.3}, U {:.3})",
+        g.east, g.north, g.up
+    );
     g
 }
 
@@ -115,13 +131,23 @@ fn has(args: &[String], key: &str) -> bool {
 
 /// Píxel (fila, col) más cercano a una coordenada lon/lat según la geo del meta.
 fn lonlat_rc(m: &Meta, lon: f64, lat: f64) -> (usize, usize) {
-    let c = ((lon - m.geo.lon0) / m.geo.dlon).round().clamp(0.0, (m.cols - 1) as f64) as usize;
-    let r = ((lat - m.geo.lat0) / m.geo.dlat).round().clamp(0.0, (m.rows - 1) as f64) as usize;
+    let c = ((lon - m.geo.lon0) / m.geo.dlon)
+        .round()
+        .clamp(0.0, (m.cols - 1) as f64) as usize;
+    let r = ((lat - m.geo.lat0) / m.geo.dlat)
+        .round()
+        .clamp(0.0, (m.rows - 1) as f64) as usize;
     (r, c)
 }
 
 /// Aplica troposfera (topo-correlacionada) + deramp + referencia a un LOS, in situ.
-fn correct(los: &mut ndarray::Array2<f32>, dem: Option<&ndarray::Array2<f32>>, m: &Meta, args: &[String], label: &str) {
+fn correct(
+    los: &mut ndarray::Array2<f32>,
+    dem: Option<&ndarray::Array2<f32>>,
+    m: &Meta,
+    args: &[String],
+    label: &str,
+) {
     if has(args, "--tropo") {
         match dem {
             Some(d) => {
@@ -156,7 +182,10 @@ fn correct(los: &mut ndarray::Array2<f32>, dem: Option<&ndarray::Array2<f32>>, m
         if n > 0 {
             let v = (sum / n as f64) as f32;
             los.mapv_inplace(|x| x - v);
-            println!("  [{label}] referencia área ({rlon:.4},{rlat:.4}) {n} px restada ({:.2} cm)", v * 100.0);
+            println!(
+                "  [{label}] referencia área ({rlon:.4},{rlat:.4}) {n} px restada ({:.2} cm)",
+                v * 100.0
+            );
         } else {
             eprintln!("  [{label}] aviso: ventana de referencia sin píxeles finitos, no aplicada");
         }
@@ -174,7 +203,9 @@ fn read_dem(dir: &Path, rows: usize, cols: usize) -> Option<ndarray::Array2<f32>
 
 fn write_tif(path: &Path, data: &[f32], m: &Meta) {
     let mut raster = Raster::from_vec(data.to_vec(), m.rows, m.cols).unwrap();
-    raster.set_transform(GeoTransform::new(m.geo.lon0, m.geo.lat0, m.geo.dlon, m.geo.dlat));
+    raster.set_transform(GeoTransform::new(
+        m.geo.lon0, m.geo.lat0, m.geo.dlon, m.geo.dlat,
+    ));
     raster.set_nodata(Some(f32::NAN));
     write_geotiff(&raster, path, None).unwrap();
 }
@@ -188,7 +219,11 @@ fn main() {
 
     let (ma, la) = load(&asc_dir);
     let (md, ld) = load(&desc_dir);
-    assert_eq!((ma.rows, ma.cols), (md.rows, md.cols), "asc y desc deben compartir grilla recortada");
+    assert_eq!(
+        (ma.rows, ma.cols),
+        (md.rows, md.cols),
+        "asc y desc deben compartir grilla recortada"
+    );
     println!("grilla {}×{}", ma.rows, ma.cols);
 
     println!("geometrías de vista (suelo→satélite, ENU):");

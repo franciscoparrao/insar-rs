@@ -23,13 +23,18 @@ use geostat_core::{
 use smelt_ml::prelude::*;
 
 #[derive(Deserialize)]
-struct Meta { rows: usize, cols: usize }
+struct Meta {
+    rows: usize,
+    cols: usize,
+}
 
 fn read_f32(p: &Path, n: usize) -> Vec<f32> {
     let mut b = Vec::new();
     fs::File::open(p).unwrap().read_to_end(&mut b).unwrap();
     assert_eq!(b.len(), n * 4);
-    b.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
+    b.chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect()
 }
 
 fn predicted(p: &Prediction) -> Vec<f64> {
@@ -42,7 +47,8 @@ fn predicted(p: &Prediction) -> Vec<f64> {
 fn main() {
     let dir = std::env::args().nth(1).expect("export_dir");
     let dir = Path::new(&dir);
-    let m: Meta = serde_json::from_str(&fs::read_to_string(dir.join("meta.json")).unwrap()).unwrap();
+    let m: Meta =
+        serde_json::from_str(&fs::read_to_string(dir.join("meta.json")).unwrap()).unwrap();
     let (nr, nc) = (m.rows, m.cols);
     let vel = read_f32(&dir.join("velocity.f32"), nr * nc);
     let tcoh = read_f32(&dir.join("tcoh.f32"), nr * nc);
@@ -64,9 +70,13 @@ fn main() {
     for r in 0..nr {
         for c in 0..nc {
             let i = r * nc + c;
-            if dem[i].is_nan() { continue; }
+            if dem[i].is_nan() {
+                continue;
+            }
             if coherent(i) {
-                cx.push(c as f64); cy.push(r as f64); cval.push(vel[i] as f64 * 100.0);
+                cx.push(c as f64);
+                cy.push(r as f64);
+                cval.push(vel[i] as f64 * 100.0);
                 cov_data.push([dem[i] as f64, slope(r, c) as f64]);
             } else {
                 gaps.push((r, c));
@@ -81,7 +91,11 @@ fn main() {
     let sx: Vec<f64> = idx.iter().map(|&i| cx[i]).collect();
     let sy: Vec<f64> = idx.iter().map(|&i| cy[i]).collect();
     let sval: Vec<f64> = idx.iter().map(|&i| cval[i]).collect();
-    let scov = Array2::from_shape_vec((idx.len(), 2), idx.iter().flat_map(|&i| cov_data[i]).collect()).unwrap();
+    let scov = Array2::from_shape_vec(
+        (idx.len(), 2),
+        idx.iter().flat_map(|&i| cov_data[i]).collect(),
+    )
+    .unwrap();
 
     // --- TENDENCIA: RandomForest de Smelt, terreno → velocidad ---
     let task = RegressionTask::new("trend", scov.clone(), sval.clone()).unwrap();
@@ -92,30 +106,62 @@ fn main() {
     // del terreno se reporta sobre un 30% retenido (entrenando en el otro 70%).
     let n = sval.len();
     let cut = n * 7 / 10;
-    let tr = RegressionTask::new("tr", scov.slice(s![..cut, ..]).to_owned(), sval[..cut].to_vec()).unwrap();
+    let tr = RegressionTask::new(
+        "tr",
+        scov.slice(s![..cut, ..]).to_owned(),
+        sval[..cut].to_vec(),
+    )
+    .unwrap();
     let mut rf_cv = RandomForest::new().with_n_estimators(200);
-    let pred_te = predicted(&rf_cv.train_regress(&tr).unwrap().predict(&scov.slice(s![cut.., ..]).to_owned()).unwrap());
+    let pred_te = predicted(
+        &rf_cv
+            .train_regress(&tr)
+            .unwrap()
+            .predict(&scov.slice(s![cut.., ..]).to_owned())
+            .unwrap(),
+    );
     let te = &sval[cut..];
     let mean = te.iter().sum::<f64>() / te.len() as f64;
     let r2 = 1.0
-        - te.iter().zip(&pred_te).map(|(v, p)| (v - p).powi(2)).sum::<f64>()
+        - te.iter()
+            .zip(&pred_te)
+            .map(|(v, p)| (v - p).powi(2))
+            .sum::<f64>()
             / te.iter().map(|v| (v - mean).powi(2)).sum::<f64>();
-    println!("tendencia terreno→velocidad: R² held-out = {:.3} (in-sample optimista)", r2);
+    println!(
+        "tendencia terreno→velocidad: R² held-out = {:.3} (in-sample optimista)",
+        r2
+    );
 
     // --- RESIDUOS: regression kriging con geostat-rs ---
     let data = PointSet::<2>::from_xyz(&sx, &sy, &sval).unwrap();
     let rk = RegressionKriging::new(&data, &trend_at_data).unwrap();
-    let vcfg = VariogramConfig { n_lags: 15, max_dist: (nr.min(nc) as f64) / 3.0, direction: None };
+    let vcfg = VariogramConfig {
+        n_lags: 15,
+        max_dist: (nr.min(nc) as f64) / 3.0,
+        direction: None,
+    };
     let exp = experimental_variogram(rk.residuals(), &vcfg).unwrap();
-    let fit = fit_best(&exp, &[ModelKind::Spherical, ModelKind::Exponential, ModelKind::Gaussian]).unwrap();
+    let fit = fit_best(
+        &exp,
+        &[
+            ModelKind::Spherical,
+            ModelKind::Exponential,
+            ModelKind::Gaussian,
+        ],
+    )
+    .unwrap();
     println!("variograma de residuos ajustado (wsse={:.3})", fit.wsse);
 
     // Predicción en los huecos: covariables de terreno allí + kriging de residuos.
     let targets: Vec<[f64; 2]> = gaps.iter().map(|&(r, c)| [c as f64, r as f64]).collect();
     let tcov = Array2::from_shape_vec(
         (gaps.len(), 2),
-        gaps.iter().flat_map(|&(r, c)| [dem[r * nc + c] as f64, slope(r, c) as f64]).collect(),
-    ).unwrap();
+        gaps.iter()
+            .flat_map(|&(r, c)| [dem[r * nc + c] as f64, slope(r, c) as f64])
+            .collect(),
+    )
+    .unwrap();
     let trend_at_targets = predicted(&model.predict(&tcov).unwrap());
     // KrigingConfig es #[non_exhaustive]: no se puede usar sintaxis de struct
     // literal desde este crate aunque los campos sean pub, así que se
@@ -124,24 +170,40 @@ fn main() {
     cfg.method = KrigingMethod::Ordinary;
     cfg.max_neighbors = Some(40);
     let t = std::time::Instant::now();
-    let est = rk.predict(&targets, &trend_at_targets, &fit.model, &cfg).unwrap();
-    println!("regression kriging de {} huecos: {:.1}s", targets.len(), t.elapsed().as_secs_f64());
+    let est = rk
+        .predict(&targets, &trend_at_targets, &fit.model, &cfg)
+        .unwrap();
+    println!(
+        "regression kriging de {} huecos: {:.1}s",
+        targets.len(),
+        t.elapsed().as_secs_f64()
+    );
 
     // Campo predicho + incertidumbre.
     let mut filled = vec![f32::NAN; nr * nc];
     let mut rkstd = vec![0.0f32; nr * nc];
-    for i in 0..nr * nc { if coherent(i) { filled[i] = vel[i] * 100.0; } }
+    for i in 0..nr * nc {
+        if coherent(i) {
+            filled[i] = vel[i] * 100.0;
+        }
+    }
     for (k, &(r, c)) in gaps.iter().enumerate() {
         filled[r * nc + c] = est[k].value as f32;
         rkstd[r * nc + c] = est[k].variance.max(0.0).sqrt() as f32;
     }
     let write = |name: &str, d: &[f32]| {
         let mut b = Vec::with_capacity(d.len() * 4);
-        for &v in d { b.extend_from_slice(&v.to_le_bytes()); }
+        for &v in d {
+            b.extend_from_slice(&v.to_le_bytes());
+        }
         fs::write(dir.join(name), b).unwrap();
     };
     write("velocity_rk.f32", &filled);
     write("rk_std.f32", &rkstd);
-    let gstd: f64 = gaps.iter().map(|&(r, c)| rkstd[r * nc + c] as f64).sum::<f64>() / gaps.len().max(1) as f64;
+    let gstd: f64 = gaps
+        .iter()
+        .map(|&(r, c)| rkstd[r * nc + c] as f64)
+        .sum::<f64>()
+        / gaps.len().max(1) as f64;
     println!("OK → velocity_rk.f32 + rk_std.f32  (σ media en huecos = {gstd:.2} cm/año)");
 }

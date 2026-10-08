@@ -65,7 +65,12 @@ fn unwrapped(n_epochs: usize, rows: usize, cols: usize) -> UnwrappedStack {
             }
         }
     }
-    UnwrappedStack { data, epochs: eps, pairs: prs, meta: meta() }
+    UnwrappedStack {
+        data,
+        epochs: eps,
+        pairs: prs,
+        meta: meta(),
+    }
 }
 
 fn amp_stack(n_epochs: usize, rows: usize, cols: usize) -> AmplitudeStack {
@@ -77,7 +82,11 @@ fn amp_stack(n_epochs: usize, rows: usize, cols: usize) -> AmplitudeStack {
             }
         }
     }
-    AmplitudeStack { data, epochs: epochs(n_epochs), meta: meta() }
+    AmplitudeStack {
+        data,
+        epochs: epochs(n_epochs),
+        meta: meta(),
+    }
 }
 
 fn bench_inversion(c: &mut Criterion) {

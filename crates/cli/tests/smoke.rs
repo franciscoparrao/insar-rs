@@ -23,7 +23,10 @@ fn write_tif(path: &Path, value: f32) {
         incidence_deg: 39.0,
         heading_deg: None,
     };
-    let map = VelocityMap { data: Array2::from_elem((ROWS, COLS), value), meta };
+    let map = VelocityMap {
+        data: Array2::from_elem((ROWS, COLS), value),
+        meta,
+    };
     insar_core::io::write_velocity(&map, path).expect("escribir tif de prueba");
 }
 
@@ -61,15 +64,26 @@ fn info_y_network_sobre_stack_sintetico() {
 
     // `insar info`: dimensiones y metadata legibles.
     let out = run(&["info", base.to_str().unwrap()]);
-    assert!(out.status.success(), "info falló: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "info falló: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("épocas"), "stdout: {stdout}");
     assert!(stdout.contains("3"), "3 épocas esperadas: {stdout}");
-    assert!(stdout.contains(&format!("{ROWS} × {COLS}")), "grilla: {stdout}");
+    assert!(
+        stdout.contains(&format!("{ROWS} × {COLS}")),
+        "grilla: {stdout}"
+    );
 
     // `insar network`: la red consecutiva es conexa.
     let out = run(&["network", base.to_str().unwrap()]);
-    assert!(out.status.success(), "network falló: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "network falló: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("conexa:   sí"), "stdout: {stdout}");
 
@@ -77,7 +91,10 @@ fn info_y_network_sobre_stack_sintetico() {
     let out = run(&["info", "/directorio/que/no/existe"]);
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(!stderr.contains("panicked"), "no debe haber panic: {stderr}");
+    assert!(
+        !stderr.contains("panicked"),
+        "no debe haber panic: {stderr}"
+    );
 
     let _ = fs::remove_dir_all(&base);
 }
@@ -118,7 +135,11 @@ fn decompose_features_deramp_sobre_datos_sinteticos() {
         "--desc-heading-deg",
         "191",
     ]);
-    assert!(out.status.success(), "decompose falló: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "decompose falló: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert!(decompose_out.join("up.tif").exists());
     assert!(decompose_out.join("east.tif").exists());
 
@@ -139,18 +160,40 @@ fn decompose_features_deramp_sobre_datos_sinteticos() {
     let data = Array3::from_shape_fn((n, ROWS, COLS), |(k, r, c)| {
         -0.01 * k as f32 + (r * COLS + c) as f32 * 1e-4
     });
-    let series = DisplacementSeries { data, epochs, meta: test_meta() };
+    let series = DisplacementSeries {
+        data,
+        epochs,
+        meta: test_meta(),
+    };
     insar_core::io::write_series(&series, &series_dir).expect("escribir serie de prueba");
 
     let features_out = base.join("features");
-    let out = run(&["features", series_dir.to_str().unwrap(), features_out.to_str().unwrap(), "--csv"]);
-    assert!(out.status.success(), "features falló: {}", String::from_utf8_lossy(&out.stderr));
+    let out = run(&[
+        "features",
+        series_dir.to_str().unwrap(),
+        features_out.to_str().unwrap(),
+        "--csv",
+    ]);
+    assert!(
+        out.status.success(),
+        "features falló: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert!(features_out.join("velocity.tif").exists());
     assert!(features_out.join("features.csv").exists());
 
     let deramp_out = base.join("deramp");
-    let out = run(&["deramp", series_dir.to_str().unwrap(), deramp_out.to_str().unwrap(), "linear"]);
-    assert!(out.status.success(), "deramp falló: {}", String::from_utf8_lossy(&out.stderr));
+    let out = run(&[
+        "deramp",
+        series_dir.to_str().unwrap(),
+        deramp_out.to_str().unwrap(),
+        "linear",
+    ]);
+    assert!(
+        out.status.success(),
+        "deramp falló: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert!(deramp_out.join("disp_20230101.tif").exists());
 
     // `tropo-era5`: cubo de retardo sintético con las MISMAS fechas que
@@ -166,10 +209,14 @@ fn decompose_features_deramp_sobre_datos_sinteticos() {
     .map(|s| Epoch(s.parse().unwrap()))
     .collect();
     let delay_dir = base.join("era5_delay");
-    let delay_data =
-        Array3::from_shape_fn((delay_epochs.len(), ROWS, COLS), |(k, _, _)| 0.001 * k as f32);
-    let delay_series =
-        DisplacementSeries { data: delay_data, epochs: delay_epochs, meta: test_meta() };
+    let delay_data = Array3::from_shape_fn((delay_epochs.len(), ROWS, COLS), |(k, _, _)| {
+        0.001 * k as f32
+    });
+    let delay_series = DisplacementSeries {
+        data: delay_data,
+        epochs: delay_epochs,
+        meta: test_meta(),
+    };
     insar_core::io::write_series(&delay_series, &delay_dir).expect("escribir cubo ERA5 de prueba");
 
     let era5_out = base.join("era5_out");
@@ -179,8 +226,13 @@ fn decompose_features_deramp_sobre_datos_sinteticos() {
         delay_dir.to_str().unwrap(),
         era5_out.to_str().unwrap(),
     ]);
-    assert!(out.status.success(), "tropo-era5 falló: {}", String::from_utf8_lossy(&out.stderr));
-    let corrected = insar_core::io::read_series(&era5_out, test_meta()).expect("leer serie corregida");
+    assert!(
+        out.status.success(),
+        "tropo-era5 falló: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let corrected =
+        insar_core::io::read_series(&era5_out, test_meta()).expect("leer serie corregida");
     // Época 0 (referencia): sin cambio. Época k: += delay[k] - delay[0].
     for k in 0..n {
         let expected_delta = 0.001 * k as f32;
@@ -199,7 +251,10 @@ fn decompose_features_deramp_sobre_datos_sinteticos() {
 
     // Cubo con fechas distintas → error explícito, no panic.
     let bad_delay_dir = base.join("era5_delay_bad");
-    let bad_epochs: Vec<Epoch> = ["2023-01-01", "2023-01-13"].iter().map(|s| Epoch(s.parse().unwrap())).collect();
+    let bad_epochs: Vec<Epoch> = ["2023-01-01", "2023-01-13"]
+        .iter()
+        .map(|s| Epoch(s.parse().unwrap()))
+        .collect();
     let bad_delay = DisplacementSeries {
         data: Array3::from_elem((2, ROWS, COLS), 0.0_f32),
         epochs: bad_epochs,
@@ -214,7 +269,10 @@ fn decompose_features_deramp_sobre_datos_sinteticos() {
     ]);
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(!stderr.contains("panicked"), "no debe haber panic: {stderr}");
+    assert!(
+        !stderr.contains("panicked"),
+        "no debe haber panic: {stderr}"
+    );
 
     let _ = fs::remove_dir_all(&base);
 }
@@ -245,8 +303,14 @@ fn ref_region_no_hace_panic_con_flags_invalidos() {
     ]);
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(!stderr.contains("panicked"), "no debe haber panic: {stderr}");
-    assert!(!stderr.contains("unreachable"), "no debe haber unreachable: {stderr}");
+    assert!(
+        !stderr.contains("panicked"),
+        "no debe haber panic: {stderr}"
+    );
+    assert!(
+        !stderr.contains("unreachable"),
+        "no debe haber unreachable: {stderr}"
+    );
 
     // Rango inválido (mín > máx): error limpio, no panic.
     let out = run(&[
@@ -261,7 +325,10 @@ fn ref_region_no_hace_panic_con_flags_invalidos() {
     ]);
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(!stderr.contains("panicked"), "no debe haber panic: {stderr}");
+    assert!(
+        !stderr.contains("panicked"),
+        "no debe haber panic: {stderr}"
+    );
     assert!(stderr.contains("inválido"), "stderr: {stderr}");
 
     // --ref-row/--ref-col junto a --ref-region: conflicto explícito.
@@ -281,6 +348,9 @@ fn ref_region_no_hace_panic_con_flags_invalidos() {
     ]);
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(!stderr.contains("panicked"), "no debe haber panic: {stderr}");
+    assert!(
+        !stderr.contains("panicked"),
+        "no debe haber panic: {stderr}"
+    );
     assert!(stderr.contains("excluyentes"), "stderr: {stderr}");
 }

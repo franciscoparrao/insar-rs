@@ -20,7 +20,7 @@ use std::path::Path;
 
 use insar_core::types::SENTINEL1_WAVELENGTH_M;
 use surtgis_core::io::write_geotiff;
-use surtgis_core::{Raster, CRS, GeoTransform};
+use surtgis_core::{CRS, GeoTransform, Raster};
 
 const N_EPOCHS: usize = 6;
 const GRID: usize = 24;
@@ -86,8 +86,8 @@ fn generate(dir: &Path) -> Result<usize, Box<dyn std::error::Error>> {
         let mut im = vec![0.0f32; GRID * GRID];
         for r in 0..GRID {
             for c in 0..GRID {
-                let dd = displacement(&dates, r, c, secondary)
-                    - displacement(&dates, r, c, reference);
+                let dd =
+                    displacement(&dates, r, c, secondary) - displacement(&dates, r, c, reference);
                 let phi = -4.0 * PI / SENTINEL1_WAVELENGTH_M * dd;
                 let k = r * GRID + c;
                 re[k] = phi.cos() as f32;

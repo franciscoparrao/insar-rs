@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+# Solo insar-core va a crates.io (la CLI se instala desde el repo; el binding
+# se publica en PyPI con maturin).
+publish = false
 repository.workspace = true
 description.workspace = true
 
