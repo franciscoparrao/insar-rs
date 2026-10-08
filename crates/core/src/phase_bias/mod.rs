@@ -208,7 +208,7 @@ fn mask_outliers(topo: &ClosureTopology, vals: &mut [Option<f64>], k: f64) {
             .collect();
         let (s, c) = dev.iter().fold((0.0, 0.0), |(s, c), d| (s + d.sin(), c + d.cos()));
         let r = (s * s + c * c).sqrt() / dev.len() as f64;
-        if !(r > 0.0) {
+        if r.is_nan() || r <= 0.0 {
             continue;
         }
         let sigma = (-2.0 * r.min(1.0).ln()).sqrt().max(OUTLIER_SIGMA_FLOOR);
