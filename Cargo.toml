@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/core", "crates/cli", "crates/python"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 authors = ["Francisco Parra"]
 license = "MIT OR Apache-2.0"
@@ -43,4 +43,4 @@ memmap2 = "0.9"
 surtgis-core = { version = "1.0", path = "../surtgis/crates/core", default-features = false, features = ["parallel", "complex"] }
 
 # crates internos
-insar-core = { path = "crates/core" }
+insar-core = { version = "0.3.0", path = "crates/core" }

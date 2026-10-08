@@ -441,7 +441,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Nulo C: sin cierre sistemático (ruido puro).
     let pure_noise = |_: usize, _: usize| -> f64 { 0.0 };
     println!("\n[3] sintéticos ({rows}×{cols}, ruido {noise} rad por interferograma, red real):");
-    let scen: [(&str, &dyn Fn(usize, usize) -> f64); 4] = [
+    type Scenario<'a> = (&'a str, &'a dyn Fn(usize, usize) -> f64);
+    let scen: [Scenario; 4] = [
         ("positive_model", &model),
         ("null_equal", &null_equal),
         ("null_opposite", &null_opposite),

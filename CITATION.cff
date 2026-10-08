@@ -14,16 +14,14 @@ identifiers:
   - type: doi
     value: "10.5281/zenodo.21924287"
     description: "Concept DOI (all versions)"
-  - type: doi
-    value: "10.5281/zenodo.21924288"
-    description: "Version DOI (v0.2.0)"
 abstract: >-
   A native Rust engine for InSAR time-series analysis of ground deformation
   from Sentinel-1 data (PS-InSAR and Small-Baseline Subset), with a native
   ISCE reader, quality-guided and SNAPHU unwrapping, robust SBAS inversion
-  (OLS/WLS/L1-IRLS) with DEM-error estimation, GACOS/ERA5 tropospheric
-  correction, LOS decomposition and per-pixel ML features. Certified numerical
-  parity with MintPy on the Fernandina Sentinel-1 stack (r = 1.000000).
+  (OLS/WLS/L1-IRLS) with DEM-error estimation, native non-closure phase-bias
+  correction, LiCSAR reader, GACOS/ERA5 tropospheric correction, LOS
+  decomposition and per-pixel ML features. Numerical parity with MintPy 1.6.3
+  on the Fernandina Sentinel-1 stack (series RMSE 0.034 µm, r = 1.000000).
   Consumable as a Rust library, CLI, and Python bindings (insar-rs on PyPI).
 keywords:
   - InSAR
@@ -35,4 +33,5 @@ keywords:
   - remote sensing
   - Rust
 license: MIT
-version: v0.2.0
+version: v0.3.0
+date-released: "2026-10-08"

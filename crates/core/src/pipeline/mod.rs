@@ -10,11 +10,14 @@
 //! 2. Si hay `ps_threshold`, lee amplitudes del mismo directorio, calcula
 //!    amplitude dispersion y selecciona PS; sin umbral se invierte toda la
 //!    grilla (modo SBAS clásico).
-//! 3. Corrige el sesgo de fase de no-cierre sobre la fase **envuelta**
-//!    (`phase_bias::correct_phase_bias`, si `phase_bias`). Va antes de
-//!    desenrollar: el sesgo perturba la fase envuelta, así que corregirlo
-//!    después obligaría a re-desenrollar. Es un problema distinto del paso
-//!    5 — fraccional vs salto entero de 2π (ver [`crate::phase_bias`]).
+//! 3. Estima el sesgo de fase de no-cierre desde los cierres de la fase
+//!    **envuelta** (`phase_bias::correct_phase_bias`, si `phase_bias`). Por
+//!    defecto ([`PhaseBiasStage::AfterUnwrap`]) la pantalla de corrección se
+//!    guarda y se resta después del paso 4, así el desenrollado ve los
+//!    mismos interferogramas que sin corrección; con
+//!    [`PhaseBiasStage::BeforeUnwrap`] se corrigen los envueltos aquí. Es un
+//!    problema distinto del paso 5 — fraccional vs salto entero de 2π (ver
+//!    [`crate::phase_bias`]).
 //! 4. Desenrolla la fase de cada par con el backend configurado
 //!    ([`SbasPipelineConfig::unwrap_backend`]): flood-fill propio
 //!    (`unwrap::unwrap_stack_min_quality`, default, con el umbral opcional

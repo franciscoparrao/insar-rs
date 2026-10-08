@@ -5,7 +5,59 @@ versionado: [SemVer](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
-### Corrección de phase bias (sesgo de fase de no-cierre)
+## [0.3.0] — 2026-10-08
+
+Resumen: corrección nativa del sesgo de fase de no-cierre (phase bias)
+integrada al pipeline, lector de productos LiCSAR, corrección troposférica
+GACOS end-to-end y paridad con MintPy re-certificada con las convenciones
+alineadas. Sin cambios incompatibles para quien no configura `phase_bias`.
+
+**Cambio de comportamiento a notar:** con `phase_bias` configurado, el default
+de `SbasPipelineConfig::phase_bias_stage` es `PhaseBiasStage::AfterUnwrap`.
+Para recuperar el comportamiento previo a esta versión, fijar
+`phase_bias_stage: PhaseBiasStage::BeforeUnwrap`.
+
+### Added
+
+- `io::licsar`: `read_licsar_stack` lee productos LiCSAR/COMET (GEOC, fase
+  envuelta `geo.diff_unfiltered_pha.tif`) a un `IfgStack` con recorte por AOI
+  y rango de fechas, y descubre la red (redes incompletas válidas).
+  `read_licsar_coherence` lee `geo.cc.tif` alineado con el stack. Sin GDAL.
+- `pipeline::PhaseBiasStage` (`AfterUnwrap` por defecto, `BeforeUnwrap`):
+  decide sobre qué fase se resta la corrección; la estimación usa siempre los
+  cierres envueltos. Con `AfterUnwrap` el desenrollado no ve la corrección y
+  no puede cambiar la solución entera (en Ñuble, corregir antes introducía
+  cambios de ciclo en vegetación).
+- `PhaseBiasConfig::outlier_sigma` (default `Some(2.0)`): enmascarado robusto
+  de cierres atípicos por píxel y span (Maghsoudi et al. 2025, §2.1).
+- `phase_bias::estimate_bias_terms` (términos δ̂ por par y píxel, para
+  validación out-of-sample) y `phase_bias::closure_rms_map` (RMS de cierre
+  por píxel).
+- Scripts de validación reproducibles: `validation/bench_fernandina.sh`
+  (benchmark vs MintPy, 5 repeticiones, hilos igualados) y
+  `validation/make_figure_parity.py` (paridad con convenciones alineadas).
+
+### Fixed
+
+- `inversion::select_reference_pixel` descarta píxeles con coherencia
+  saturada (≥ 0.999 en la mayoría de los pares), que en LiCSAR pueden tener
+  fase aleatoria.
+- `unwrap::snaphu`: coherencia no finita → 0 antes de invocar `snaphu` (antes
+  abortaba con la coherencia LiCSAR).
+- `CoefficientEstimate::anchor_days` reporta el lapso real de las anclas
+  usadas, no la mediana de toda la serie.
+
+### Changed
+
+- Paridad con MintPy (Fernandina) re-certificada con MintPy 1.6.3: serie
+  RMSE 0.034 µm y velocidad RMSE 0.013 µm/año, alineando dos convenciones de
+  MintPy (fase referenciada == 0 como dato faltante y eje de tiempo en año
+  decimal). Detalle en `docs/validation.md`.
+- Solo `insar-core` se publica en crates.io (`publish = false` en
+  `insar-cli` e `insar-python`); `surtgis-core` 1.5.2.
+- `cargo fmt` aplicado a todo el workspace; clippy limpio con `-D warnings`.
+
+### Detalle: corrección de phase bias
 
 Nuevo módulo `phase_bias` e integración como paso 3 de `run_sbas`
 (`SbasPipelineConfig::phase_bias`, `SbasProducts::phase_bias_report`).
@@ -21,10 +73,10 @@ producir velocidades sesgadas — imita subsidencia en cultivo y bosque.
 dos módulos usan la misma palabra "cierre": `unwrap_error` resuelve saltos
 **enteros** de 2π (Yunjun et al. 2019) sobre fase desenrollada; `phase_bias`
 resuelve la parte **fraccional** del cierre —justo lo que el otro redondea a
-cero y descarta— sobre fase **envuelta**. Son ortogonales y van en puntos
-distintos del pipeline: phase bias antes de desenrollar (es una perturbación
-de la fase envuelta; corregirlo después obligaría a re-desenrollar), errores de
-desenrollado después. El doc del módulo lleva la tabla comparativa.
+cero y descarta— y la estima sobre fase **envuelta**. Son ortogonales. La
+corrección de phase bias se resta por defecto a la fase ya desenrollada
+(`PhaseBiasStage::AfterUnwrap`); la corrección de errores de desenrollado va
+después. El doc del módulo lleva la tabla comparativa.
 
 Que la estimación trabaje sobre fase envuelta —cierres calculados como
 argumento del producto complejo, no restando fases desenrolladas— es lo que
@@ -90,7 +142,7 @@ con el RMS de cierre cayendo de 0,242 a 1,1e−8 rad.
 Limitación conocida: el camino `run_sbas_isce` lee `.unw` ya desenrollados, así
 que la corrección **no aplica** ahí — requiere fase envuelta.
 
-### Corrección troposférica GACOS (P0.2 del roadmap de datos abiertos)
+### Detalle: corrección troposférica GACOS (P0.2 del roadmap de datos abiertos)
 
 Nuevo módulo `troposphere::gacos` y subcomando `insar tropo-gacos`. Es la
 **primera vía troposférica del motor operable end-to-end**: lee los pares
