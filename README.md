@@ -44,7 +44,7 @@ Scatterers, con validación numérica contra MintPy.
 ## Validación
 
 Paridad numérica con MintPy sobre el dataset Fernandina (Sentinel-1, camino
-OLS): serie temporal RMSE 0.0029 mm, velocidad RMSE 0.0070 mm/año,
+OLS): serie temporal RMSE 0.034 µm, velocidad RMSE 0.013 µm/año,
 r = 1.000000. Detalle en [`docs/validation.md`](docs/validation.md);
 rendimiento en [`docs/benchmarks.md`](docs/benchmarks.md).
 
@@ -80,7 +80,7 @@ pip install insar-rs
 ```
 
 La validación es reproducible: el ejemplo `validate_fernandina` recompone la
-paridad con MintPy (serie RMSE 0.0029 mm, velocidad 0.0070 mm/año,
+paridad con MintPy (serie RMSE 0.034 µm, velocidad 0.013 µm/año,
 r = 1.000000) sobre el stack público de Fernandina; metodología en
 [`docs/validation.md`](docs/validation.md).
 

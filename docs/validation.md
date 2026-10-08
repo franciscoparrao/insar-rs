@@ -16,6 +16,28 @@ nivel del redondeo de punto flotante**:
 
 (RMSE sobre 26.46 M muestras de serie y 270 k píxeles de velocidad.)
 
+> **Actualización 2026-10-07 (MintPy 1.6.3, referencia 76/156).** Las cifras
+> de la tabla de junio mezclaban dos convenciones de MintPy con diferencias
+> reales. Alineadas ambas, la paridad es: serie RMSE **0.034 µm**
+> (P99.9 0.16 µm, max 0.42 µm) y velocidad RMSE **0.013 µm/año**
+> (max 0.09 µm/año) sobre 269 976 píxeles. Las dos convenciones:
+>
+> 1. **Fase cero = sin dato.** `ifgram_inversion.py` (1.6.3, l. 710) pasa a
+>    NaN toda fase exactamente 0 *tras referenciar*, sin opción para
+>    desactivarlo. En Fernandina 24 píxeles igualan el valor f32 del píxel de
+>    referencia en algún ifg; MintPy descarta ese ifg y se aleja hasta
+>    642 µm de la solución LSQ en float64, mientras insar-rs queda a ≤0.04 µm
+>    de ella. Reproduciendo el descarte, MintPy vuelve a ≤0.13 µm. Esos 24
+>    píxeles concentraban el 99.5 % del MSE (de ahí RMSE 0.48 µm con
+>    P99.9 0.16 µm).
+> 2. **Eje de tiempo.** MintPy usa `año + (doy−1)/365.25` (no uniforme en los
+>    cambios de año); insar-rs usa días/365.25. Escala la velocidad en
+>    ~5e−4 relativo: RMSE 5.3 µm/año y el "dipolo" de la Fig. 2b anterior,
+>    que seguía el patrón de deformación (r = −0.94 entre Δv y v).
+>
+> Script: `validation/make_figure_parity.py` (cadena en
+> `docs/phase_bias/closure_figs.md`).
+
 ![Comparación de velocidad LOS](../validation/validation_velocity.png)
 
 Los dos mapas de velocidad son indistinguibles; la diferencia se mantiene

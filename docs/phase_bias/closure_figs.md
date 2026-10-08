@@ -50,9 +50,12 @@ Dos lecturas para el paper:
 **F2 `figs/fig_parity.pdf`** — paridad numérica vs MintPy (Fernandina, 98
 épocas, 288 ifgs, 270 k px, mismo píxel de referencia 76/156 a ambos lados):
 
-- Serie temporal: RMSE **0.0005 mm**, r = 1.000000 (26.5 M comparaciones);
-  P99.9 |Δ| = 0.16 µm.
-- Velocidad: RMSE **5.3 µm/año**, r = 1.000000.
+- Serie temporal: RMSE **0.034 µm**, r = 1.000000 (26.46 M comparaciones);
+  P99.9 |Δ| = 0.16 µm, max 0.42 µm.
+- Velocidad: RMSE **0.013 µm/año** (eje de tiempo común).
+- *(2026-10-07)* Las cifras previas (RMSE 0.0005 mm, 5.3 µm/año) incluían 24
+  píxeles donde MintPy descarta fases referenciadas == 0 y la convención de
+  año decimal de MintPy; detalle en `docs/validation.md`.
 
 Cadena de regeneración (los intermedios pesados no se conservan):
 ```bash
