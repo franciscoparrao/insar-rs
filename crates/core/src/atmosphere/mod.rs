@@ -50,7 +50,10 @@ pub struct ApsConfig {
 
 impl Default for ApsConfig {
     fn default() -> Self {
-        Self { spatial_sigma_px: 8.0, temporal_window_epochs: 5 }
+        Self {
+            spatial_sigma_px: 8.0,
+            temporal_window_epochs: 5,
+        }
     }
 }
 
@@ -287,7 +290,11 @@ mod tests {
 
     fn series_from(data: Array3<f32>) -> DisplacementSeries {
         let n = data.shape()[0];
-        DisplacementSeries { data, epochs: epochs(n), meta: meta() }
+        DisplacementSeries {
+            data,
+            epochs: epochs(n),
+            meta: meta(),
+        }
     }
 
     /// Deformación lineal en el tiempo con tasa que varía suavemente en
@@ -316,14 +323,12 @@ mod tests {
     /// RMS del residuo (serie − deformación pura) en la época `e`,
     /// excluyendo píxeles no finitos.
     fn rms_residual(series: &Array3<f32>, truth: &Array3<f32>, e: usize) -> f64 {
-        rms(
-            series
-                .index_axis(Axis(0), e)
-                .iter()
-                .zip(truth.index_axis(Axis(0), e).iter())
-                .filter(|(s, _)| s.is_finite())
-                .map(|(&s, &t)| f64::from(s) - f64::from(t)),
-        )
+        rms(series
+            .index_axis(Axis(0), e)
+            .iter()
+            .zip(truth.index_axis(Axis(0), e).iter())
+            .filter(|(s, _)| s.is_finite())
+            .map(|(&s, &t)| f64::from(s) - f64::from(t)))
     }
 
     /// Ruido pseudo-aleatorio determinista (LCG) en [-0.5, 0.5).
@@ -337,16 +342,25 @@ mod tests {
     #[test]
     fn ventana_par_es_error() {
         let mut s = series_from(linear_deformation(5, 4, 4));
-        let cfg = ApsConfig { spatial_sigma_px: 2.0, temporal_window_epochs: 4 };
+        let cfg = ApsConfig {
+            spatial_sigma_px: 2.0,
+            temporal_window_epochs: 4,
+        };
         let err = correct_aps(&mut s, &cfg).unwrap_err();
-        assert!(matches!(err, InsarError::Metadata(_)), "se esperaba Metadata, hubo {err:?}");
+        assert!(
+            matches!(err, InsarError::Metadata(_)),
+            "se esperaba Metadata, hubo {err:?}"
+        );
     }
 
     #[test]
     fn sigma_invalido_es_error() {
         for sigma in [0.0_f32, -1.5, f32::NAN, f32::INFINITY] {
             let mut s = series_from(linear_deformation(5, 4, 4));
-            let cfg = ApsConfig { spatial_sigma_px: sigma, temporal_window_epochs: 5 };
+            let cfg = ApsConfig {
+                spatial_sigma_px: sigma,
+                temporal_window_epochs: 5,
+            };
             let err = correct_aps(&mut s, &cfg).unwrap_err();
             assert!(
                 matches!(err, InsarError::Metadata(_)),
@@ -359,7 +373,10 @@ mod tests {
     fn deformacion_lineal_pasa_intacta() {
         let truth = linear_deformation(9, 16, 16);
         let mut s = series_from(truth.clone());
-        let cfg = ApsConfig { spatial_sigma_px: 2.0, temporal_window_epochs: 5 };
+        let cfg = ApsConfig {
+            spatial_sigma_px: 2.0,
+            temporal_window_epochs: 5,
+        };
         correct_aps(&mut s, &cfg).unwrap();
         let max_diff = s
             .data
@@ -369,7 +386,10 @@ mod tests {
             .fold(0.0_f64, f64::max);
         // Ventana centrada con truncamiento simétrico → pasa-alto exactamente
         // cero para señal lineal equiespaciada (solo redondeo f32).
-        assert!(max_diff < 1e-6, "deformación lineal alterada: max_diff={max_diff}");
+        assert!(
+            max_diff < 1e-6,
+            "deformación lineal alterada: max_diff={max_diff}"
+        );
     }
 
     #[test]
@@ -383,7 +403,10 @@ mod tests {
 
         let before = rms_residual(&data, &truth, e_art);
         let mut s = series_from(data);
-        let cfg = ApsConfig { spatial_sigma_px: 2.0, temporal_window_epochs: 7 };
+        let cfg = ApsConfig {
+            spatial_sigma_px: 2.0,
+            temporal_window_epochs: 7,
+        };
         correct_aps(&mut s, &cfg).unwrap();
         let after = rms_residual(&s.data, &truth, e_art);
 
@@ -398,19 +421,20 @@ mod tests {
     fn ruido_blanco_no_se_trata_como_aps() {
         let (n, rows, cols) = (9, 16, 16);
         let mut seed = 42_u64;
-        let noise =
-            Array3::from_shape_fn((n, rows, cols), |_| 0.01 * lcg_noise(&mut seed));
+        let noise = Array3::from_shape_fn((n, rows, cols), |_| 0.01 * lcg_noise(&mut seed));
         let mut s = series_from(noise.clone());
-        let cfg = ApsConfig { spatial_sigma_px: 2.0, temporal_window_epochs: 5 };
+        let cfg = ApsConfig {
+            spatial_sigma_px: 2.0,
+            temporal_window_epochs: 5,
+        };
         correct_aps(&mut s, &cfg).unwrap();
 
         let noise_rms = rms(noise.iter().map(|&v| f64::from(v)));
-        let change_rms = rms(
-            s.data
-                .iter()
-                .zip(noise.iter())
-                .map(|(&a, &b)| f64::from(a) - f64::from(b)),
-        );
+        let change_rms = rms(s
+            .data
+            .iter()
+            .zip(noise.iter())
+            .map(|(&a, &b)| f64::from(a) - f64::from(b)));
         // El filtro espacial aplana el ruido incoherente: la "corrección"
         // aplicada debe ser una fracción menor del ruido, no removerlo.
         assert!(
@@ -433,7 +457,10 @@ mod tests {
         let original = data.clone();
         let before = rms_residual(&data, &truth, e_art);
         let mut s = series_from(data);
-        let cfg = ApsConfig { spatial_sigma_px: 2.0, temporal_window_epochs: 7 };
+        let cfg = ApsConfig {
+            spatial_sigma_px: 2.0,
+            temporal_window_epochs: 7,
+        };
         correct_aps(&mut s, &cfg).unwrap();
 
         // El NaN sigue siendo NaN.
@@ -471,13 +498,15 @@ mod tests {
         // tiempo tiene fit = valor → APS = 0 → sin cambios; y una tendencia
         // lineal también pasa intacta (mejora sobre la media global clásica).
         let (n, rows, cols) = (5, 8, 8);
-        let constant = Array3::from_shape_fn((n, rows, cols), |(_, r, c)| {
-            0.01 * (r as f32 - c as f32)
-        });
+        let constant =
+            Array3::from_shape_fn((n, rows, cols), |(_, r, c)| 0.01 * (r as f32 - c as f32));
         let linear = linear_deformation(n, rows, cols);
         for data in [constant, linear] {
             let mut s = series_from(data.clone());
-            let cfg = ApsConfig { spatial_sigma_px: 1.5, temporal_window_epochs: 7 };
+            let cfg = ApsConfig {
+                spatial_sigma_px: 1.5,
+                temporal_window_epochs: 7,
+            };
             correct_aps(&mut s, &cfg).unwrap();
             let max_diff = s
                 .data
@@ -485,7 +514,10 @@ mod tests {
                 .zip(data.iter())
                 .map(|(&a, &b)| (f64::from(a) - f64::from(b)).abs())
                 .fold(0.0_f64, f64::max);
-            assert!(max_diff < 1e-6, "serie sin componente APS alterada: {max_diff}");
+            assert!(
+                max_diff < 1e-6,
+                "serie sin componente APS alterada: {max_diff}"
+            );
         }
     }
 
@@ -519,8 +551,15 @@ mod tests {
             let rate = 0.02 * (r as f32 + c as f32); // m/año
             rate * t[e] as f32
         });
-        let mut s = DisplacementSeries { data: truth.clone(), epochs, meta: meta() };
-        let cfg = ApsConfig { spatial_sigma_px: 2.0, temporal_window_epochs: 5 };
+        let mut s = DisplacementSeries {
+            data: truth.clone(),
+            epochs,
+            meta: meta(),
+        };
+        let cfg = ApsConfig {
+            spatial_sigma_px: 2.0,
+            temporal_window_epochs: 5,
+        };
         correct_aps(&mut s, &cfg).unwrap();
         let max_diff = s
             .data
@@ -552,8 +591,15 @@ mod tests {
             .zip_mut_with(&art, |d, &a| *d += a);
 
         let before = rms_residual(&data, &truth, e_art);
-        let mut s = DisplacementSeries { data, epochs, meta: meta() };
-        let cfg = ApsConfig { spatial_sigma_px: 2.0, temporal_window_epochs: 7 };
+        let mut s = DisplacementSeries {
+            data,
+            epochs,
+            meta: meta(),
+        };
+        let cfg = ApsConfig {
+            spatial_sigma_px: 2.0,
+            temporal_window_epochs: 7,
+        };
         correct_aps(&mut s, &cfg).unwrap();
         let after = rms_residual(&s.data, &truth, e_art);
 

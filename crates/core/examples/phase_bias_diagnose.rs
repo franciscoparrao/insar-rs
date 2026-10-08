@@ -19,8 +19,8 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use insar_core::io::isce::{read_isce_wrapped_stack, IsceLoadConfig};
-use insar_core::phase_bias::{closure_rms, estimate_coefficients, PhaseBiasConfig};
+use insar_core::io::isce::{IsceLoadConfig, read_isce_wrapped_stack};
+use insar_core::phase_bias::{PhaseBiasConfig, closure_rms, estimate_coefficients};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dir: PathBuf = std::env::args()
@@ -94,7 +94,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // --- 4. ¿Se pueden estimar los coeficientes? ---
-    let pb = PhaseBiasConfig { max_span: 3, ..Default::default() };
+    let pb = PhaseBiasConfig {
+        max_span: 3,
+        ..Default::default()
+    };
     println!("\n== Coeficientes ==");
     match estimate_coefficients(&stack, &pb) {
         Ok(est) => {

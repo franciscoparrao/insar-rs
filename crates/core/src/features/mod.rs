@@ -65,7 +65,11 @@ pub struct FeatureConfig {
 
 impl Default for FeatureConfig {
     fn default() -> Self {
-        Self { seasonal: true, acceleration: true, min_valid_epochs: 5 }
+        Self {
+            seasonal: true,
+            acceleration: true,
+            min_valid_epochs: 5,
+        }
     }
 }
 
@@ -128,7 +132,11 @@ pub fn extract_features(
     // ----- Matriz de diseño (idéntica para todos los píxeles) -----
     // Columnas, en orden: [1, t, (t² si accel), (sin 2πt, cos 2πt si seasonal)].
     let col_t = 1usize; // la columna de velocidad es siempre la 1.
-    let col_t2 = if config.acceleration { Some(2usize) } else { None };
+    let col_t2 = if config.acceleration {
+        Some(2usize)
+    } else {
+        None
+    };
     let n_lin = 2 + usize::from(config.acceleration); // constante + lineal (+ cuadrático)
     let (col_sin, col_cos) = if config.seasonal {
         (Some(n_lin), Some(n_lin + 1))
@@ -163,9 +171,8 @@ pub fn extract_features(
 
     // Solver del caso completo (todas las épocas finitas), cacheado una vez.
     let full_idx: Vec<usize> = (0..n_epochs).collect();
-    let full_solver = epoch_solver(&a, full_idx, col_t).ok_or_else(|| {
-        InsarError::Inversion("pseudoinversa SVD de la matriz de diseño".into())
-    })?;
+    let full_solver = epoch_solver(&a, full_idx, col_t)
+        .ok_or_else(|| InsarError::Inversion("pseudoinversa SVD de la matriz de diseño".into()))?;
 
     // Umbral efectivo por píxel: configurado, pero nunca bajo n_coef (el
     // modelo no es identificable con menos épocas que coeficientes).
@@ -573,11 +580,19 @@ mod tests {
         for e in 0..n {
             data[[e, 0, 0]] = d[e] as f32;
         }
-        DisplacementSeries { data, epochs: epochs.to_vec(), meta: meta() }
+        DisplacementSeries {
+            data,
+            epochs: epochs.to_vec(),
+            meta: meta(),
+        }
     }
 
     fn cfg() -> FeatureConfig {
-        FeatureConfig { seasonal: true, acceleration: true, min_valid_epochs: 5 }
+        FeatureConfig {
+            seasonal: true,
+            acceleration: true,
+            min_valid_epochs: 5,
+        }
     }
 
     #[test]
@@ -589,10 +604,26 @@ mod tests {
         let series = series_1px(&epochs, &d);
 
         let f = extract_features(&series, None, &cfg()).unwrap();
-        assert!((f.velocity[[0, 0]] as f64 - v_true).abs() < 1e-5, "v = {}", f.velocity[[0, 0]]);
-        assert!(f.acceleration[[0, 0]].abs() < 1e-4, "acc = {}", f.acceleration[[0, 0]]);
-        assert!((f.linearity_r2[[0, 0]] - 1.0).abs() < 1e-4, "r2 = {}", f.linearity_r2[[0, 0]]);
-        assert!(f.residual_rms[[0, 0]] < 1e-5, "rms = {}", f.residual_rms[[0, 0]]);
+        assert!(
+            (f.velocity[[0, 0]] as f64 - v_true).abs() < 1e-5,
+            "v = {}",
+            f.velocity[[0, 0]]
+        );
+        assert!(
+            f.acceleration[[0, 0]].abs() < 1e-4,
+            "acc = {}",
+            f.acceleration[[0, 0]]
+        );
+        assert!(
+            (f.linearity_r2[[0, 0]] - 1.0).abs() < 1e-4,
+            "r2 = {}",
+            f.linearity_r2[[0, 0]]
+        );
+        assert!(
+            f.residual_rms[[0, 0]] < 1e-5,
+            "rms = {}",
+            f.residual_rms[[0, 0]]
+        );
         // Acumulado = v·t_final.
         assert!((f.cumulative[[0, 0]] as f64 - v_true * t[t.len() - 1]).abs() < 1e-5);
     }
@@ -618,12 +649,18 @@ mod tests {
         let amp_true = 0.03_f64;
         let epochs = epochs_n(40, 30); // ~3.2 años
         let t: Vec<f64> = epochs.iter().map(|e| e.years_since(&epochs[0])).collect();
-        let d: Vec<f64> = t.iter().map(|&ti| amp_true * (2.0 * PI * ti).sin()).collect();
+        let d: Vec<f64> = t
+            .iter()
+            .map(|&ti| amp_true * (2.0 * PI * ti).sin())
+            .collect();
         let series = series_1px(&epochs, &d);
 
         let f = extract_features(&series, None, &cfg()).unwrap();
         let amp = f.seasonal_amplitude[[0, 0]] as f64;
-        assert!((amp - amp_true).abs() < 1e-3, "amplitud = {amp} vs {amp_true}");
+        assert!(
+            (amp - amp_true).abs() < 1e-3,
+            "amplitud = {amp} vs {amp_true}"
+        );
     }
 
     #[test]
@@ -677,7 +714,11 @@ mod tests {
         let series = series_1px(&epochs, &d);
 
         let f = extract_features(&series, None, &cfg()).unwrap();
-        assert!((f.max_step[[0, 0]] as f64 - 0.2).abs() < 1e-5, "max_step = {}", f.max_step[[0, 0]]);
+        assert!(
+            (f.max_step[[0, 0]] as f64 - 0.2).abs() < 1e-5,
+            "max_step = {}",
+            f.max_step[[0, 0]]
+        );
     }
 
     #[test]
@@ -696,7 +737,11 @@ mod tests {
         for e in [1, 3, 5, 7] {
             data[[e, 0, 1]] = f32::NAN; // píxel (0,1) bajo el umbral
         }
-        let series = DisplacementSeries { data, epochs, meta: meta() };
+        let series = DisplacementSeries {
+            data,
+            epochs,
+            meta: meta(),
+        };
 
         let f = extract_features(&series, None, &cfg()).unwrap();
 
@@ -713,7 +758,11 @@ mod tests {
         assert!((coords[0].0 - expected.0).abs() < 1e-9);
         assert!((coords[0].1 - expected.1).abs() < 1e-9);
         // La primera columna es velocity ≈ -0.05.
-        assert!((table[[0, 0]] - (-0.05)).abs() < 1e-4, "velocity tabla = {}", table[[0, 0]]);
+        assert!(
+            (table[[0, 0]] - (-0.05)).abs() < 1e-4,
+            "velocity tabla = {}",
+            table[[0, 0]]
+        );
     }
 
     #[test]
@@ -724,7 +773,11 @@ mod tests {
         let series = series_1px(&epochs, &d);
 
         // Sin seasonal ni acceleration ni coherencia.
-        let config = FeatureConfig { seasonal: false, acceleration: false, min_valid_epochs: 5 };
+        let config = FeatureConfig {
+            seasonal: false,
+            acceleration: false,
+            min_valid_epochs: 5,
+        };
         let f = extract_features(&series, None, &config).unwrap();
         let names = f.feature_names();
         assert!(!names.contains(&"acceleration"));
@@ -749,11 +802,18 @@ mod tests {
         let epochs = epochs_n(8, 24);
         let n = epochs.len();
         let data = Array3::<f32>::from_elem((n, 1, 1), f32::NAN);
-        let series = DisplacementSeries { data, epochs, meta: meta() };
+        let series = DisplacementSeries {
+            data,
+            epochs,
+            meta: meta(),
+        };
 
         let f = extract_features(&series, None, &cfg()).unwrap();
         let names = f.feature_names();
-        assert!(names.contains(&"acceleration"), "esquema estable con datos vacíos");
+        assert!(
+            names.contains(&"acceleration"),
+            "esquema estable con datos vacíos"
+        );
         assert!(names.contains(&"seasonal_amplitude"));
         assert!(names.contains(&"seasonal_phase"));
         // La tabla queda vacía pero con el número de columnas del esquema.

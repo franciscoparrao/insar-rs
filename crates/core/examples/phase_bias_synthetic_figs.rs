@@ -36,14 +36,19 @@ const A: [f64; MAX_SPAN - 1] = [0.47, 0.31];
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let start: NaiveDate = "2023-01-01".parse().unwrap();
-    let epochs: Vec<Epoch> =
-        (0..N_EPOCHS).map(|i| Epoch(start + chrono::Duration::days(DAYS_STEP * i as i64))).collect();
+    let epochs: Vec<Epoch> = (0..N_EPOCHS)
+        .map(|i| Epoch(start + chrono::Duration::days(DAYS_STEP * i as i64)))
+        .collect();
     let years: Vec<f64> = epochs.iter().map(|e| e.years_since(&epochs[0])).collect();
 
     let mut pairs = Vec::new();
     for span in 1..=MAX_SPAN {
         for i in 0..N_EPOCHS - span {
-            pairs.push(IfgPair { reference: i, secondary: i + span, perp_baseline_m: 0.0 });
+            pairs.push(IfgPair {
+                reference: i,
+                secondary: i + span,
+                perp_baseline_m: 0.0,
+            });
         }
     }
 
@@ -76,7 +81,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             data.index_axis_mut(ndarray::Axis(0), k)
                 .fill(Complex32::from_polar(1.0, phi));
         }
-        IfgStack { data, epochs: epochs.clone(), pairs: pairs.clone(), meta: meta.clone() }
+        IfgStack {
+            data,
+            epochs: epochs.clone(),
+            pairs: pairs.clone(),
+            meta: meta.clone(),
+        }
     };
 
     // |φ| ≪ π → el arg del complejo es directamente la fase desenrollada.
@@ -105,7 +115,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let c = GRID / 2;
     let series_mm = |s: &IfgStack| -> Result<Vec<f64>, Box<dyn std::error::Error>> {
         let ts = invert_sbas(&to_unwrapped(s), None)?;
-        Ok((0..N_EPOCHS).map(|e| ts.data[[e, c, c]] as f64 * 1000.0).collect())
+        Ok((0..N_EPOCHS)
+            .map(|e| ts.data[[e, c, c]] as f64 * 1000.0)
+            .collect())
     };
     let vel_mm = |s: &IfgStack| -> Result<f64, Box<dyn std::error::Error>> {
         let ts = invert_sbas(&to_unwrapped(s), None)?;

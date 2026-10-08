@@ -324,7 +324,8 @@ mod tests {
     fn recupera_up_y_east_sinteticos() {
         // Campo conocido: alzamiento y desplazamiento Este por píxel.
         let (nr, nc) = (12, 15);
-        let true_up = Array2::from_shape_fn((nr, nc), |(r, c)| 0.10 + 0.01 * r as f32 - 0.005 * c as f32);
+        let true_up =
+            Array2::from_shape_fn((nr, nc), |(r, c)| 0.10 + 0.01 * r as f32 - 0.005 * c as f32);
         let true_east = Array2::from_shape_fn((nr, nc), |(_r, c)| -0.04 + 0.003 * c as f32);
         let (ga, gd) = (asc(), desc());
         // Proyección directa a LOS de cada geometría (Norte = 0).
@@ -404,9 +405,8 @@ mod tests {
     fn per_pixel_recupera_con_incidencia_variable() {
         // Incidencia que varía por columna 30°→46° (como un swath IW real).
         let (nr, nc) = (6, 20);
-        let inc = Array2::from_shape_fn((nr, nc), |(_, c)| {
-            30.0 + 16.0 * c as f32 / (nc - 1) as f32
-        });
+        let inc =
+            Array2::from_shape_fn((nr, nc), |(_, c)| 30.0 + 16.0 * c as f32 / (nc - 1) as f32);
         let head_a = Array2::from_elem((nr, nc), -12.0_f32);
         let head_d = Array2::from_elem((nr, nc), -168.0_f32);
         let true_up = Array2::from_shape_fn((nr, nc), |(r, _)| 0.05 + 0.002 * r as f32);
@@ -415,10 +415,7 @@ mod tests {
         // Proyección a LOS con la geometría LOCAL de cada píxel.
         let proj = |head: &Array2<f32>| {
             Array2::from_shape_fn((nr, nc), |(r, c)| {
-                let g = LosVector::from_incidence_heading(
-                    inc[[r, c]] as f64,
-                    head[[r, c]] as f64,
-                );
+                let g = LosVector::from_incidence_heading(inc[[r, c]] as f64, head[[r, c]] as f64);
                 (g.up * true_up[[r, c]] as f64 + g.east * true_east[[r, c]] as f64) as f32
             })
         };
@@ -428,14 +425,23 @@ mod tests {
         let out = decompose_per_pixel(
             &[&la, &ld],
             &[
-                PerPixelGeometry { incidence_deg: &inc, heading_deg: &head_a },
-                PerPixelGeometry { incidence_deg: &inc, heading_deg: &head_d },
+                PerPixelGeometry {
+                    incidence_deg: &inc,
+                    heading_deg: &head_a,
+                },
+                PerPixelGeometry {
+                    incidence_deg: &inc,
+                    heading_deg: &head_d,
+                },
             ],
         )
         .unwrap();
         for r in 0..nr {
             for c in 0..nc {
-                assert!((out.up[[r, c]] - true_up[[r, c]]).abs() < 1e-4, "up ({r},{c})");
+                assert!(
+                    (out.up[[r, c]] - true_up[[r, c]]).abs() < 1e-4,
+                    "up ({r},{c})"
+                );
                 assert!(
                     (out.east[[r, c]] - true_east[[r, c]]).abs() < 1e-4,
                     "east ({r},{c})"
@@ -476,8 +482,14 @@ mod tests {
         let out = decompose_per_pixel(
             &[&la, &ld],
             &[
-                PerPixelGeometry { incidence_deg: &inc, heading_deg: &head_a },
-                PerPixelGeometry { incidence_deg: &inc, heading_deg: &head_d },
+                PerPixelGeometry {
+                    incidence_deg: &inc,
+                    heading_deg: &head_a,
+                },
+                PerPixelGeometry {
+                    incidence_deg: &inc,
+                    heading_deg: &head_d,
+                },
             ],
         )
         .unwrap();
@@ -492,7 +504,11 @@ mod tests {
         let (nr, nc) = (6, 6);
         let true_up = Array2::from_elem((nr, nc), 0.08f32);
         let true_east = Array2::from_elem((nr, nc), -0.03f32);
-        let g = [asc(), desc(), LosVector::from_incidence_heading(43.0, -12.0)];
+        let g = [
+            asc(),
+            desc(),
+            LosVector::from_incidence_heading(43.0, -12.0),
+        ];
         let proj = |gi: LosVector| {
             Array2::from_shape_fn((nr, nc), |(r, c)| {
                 (gi.up * true_up[[r, c]] as f64 + gi.east * true_east[[r, c]] as f64) as f32

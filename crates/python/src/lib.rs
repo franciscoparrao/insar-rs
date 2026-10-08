@@ -93,7 +93,11 @@ fn invert_sbas<'py>(
     let pairs: Vec<IfgPair> = refs
         .iter()
         .zip(&secs)
-        .map(|(&r, &s)| IfgPair { reference: r, secondary: s, perp_baseline_m: 0.0 })
+        .map(|(&r, &s)| IfgPair {
+            reference: r,
+            secondary: s,
+            perp_baseline_m: 0.0,
+        })
         .collect();
     let stack = UnwrappedStack {
         data,
@@ -103,7 +107,9 @@ fn invert_sbas<'py>(
     };
     // La entrada ya es owned: el cómputo corre sin el GIL (otros threads
     // Python siguen vivos mientras rayon trabaja).
-    let series = py.allow_threads(|| core_invert(&stack, None)).map_err(err)?;
+    let series = py
+        .allow_threads(|| core_invert(&stack, None))
+        .map_err(err)?;
     Ok(series.data.into_pyarray_bound(py))
 }
 
@@ -202,7 +208,11 @@ fn temporal_coherence<'py>(
     let pairs: Vec<IfgPair> = refs
         .iter()
         .zip(&secs)
-        .map(|(&r, &s)| IfgPair { reference: r, secondary: s, perp_baseline_m: 0.0 })
+        .map(|(&r, &s)| IfgPair {
+            reference: r,
+            secondary: s,
+            perp_baseline_m: 0.0,
+        })
         .collect();
     let epochs: Vec<Epoch> = epoch_days.iter().map(|&d| epoch_from_day(d)).collect();
     let stack = UnwrappedStack {
@@ -274,8 +284,12 @@ fn sbas_from_isce<'py>(
             products.pairs_lost_by_reference
         );
     }
-    let epochs: Vec<String> =
-        products.series.epochs.iter().map(|e| e.0.to_string()).collect();
+    let epochs: Vec<String> = products
+        .series
+        .epochs
+        .iter()
+        .map(|e| e.0.to_string())
+        .collect();
     Ok((
         products.velocity.data.into_pyarray_bound(py),
         products.velocity_std.into_pyarray_bound(py),
@@ -307,7 +321,10 @@ fn decompose_asc_desc<'py>(
     let decomposed = py
         .allow_threads(|| core_decompose_asc_desc(&asc, geom_asc, &desc, geom_desc))
         .map_err(err)?;
-    Ok((decomposed.up.into_pyarray_bound(py), decomposed.east.into_pyarray_bound(py)))
+    Ok((
+        decomposed.up.into_pyarray_bound(py),
+        decomposed.east.into_pyarray_bound(py),
+    ))
 }
 
 /// Descompone N mapas LOS en (Up, East) con geometría **por píxel**
@@ -324,11 +341,19 @@ fn decompose_per_pixel<'py>(
     heading_deg: Vec<PyReadonlyArray2<'py, f32>>,
 ) -> PyResult<(Bound<'py, PyArray2<f32>>, Bound<'py, PyArray2<f32>>)> {
     if los.len() != incidence_deg.len() || los.len() != heading_deg.len() {
-        return Err(PyValueError::new_err("los, incidence_deg y heading_deg deben tener la misma longitud"));
+        return Err(PyValueError::new_err(
+            "los, incidence_deg y heading_deg deben tener la misma longitud",
+        ));
     }
     let los_owned: Vec<Array2<f32>> = los.iter().map(|a| a.as_array().to_owned()).collect();
-    let inc_owned: Vec<Array2<f32>> = incidence_deg.iter().map(|a| a.as_array().to_owned()).collect();
-    let head_owned: Vec<Array2<f32>> = heading_deg.iter().map(|a| a.as_array().to_owned()).collect();
+    let inc_owned: Vec<Array2<f32>> = incidence_deg
+        .iter()
+        .map(|a| a.as_array().to_owned())
+        .collect();
+    let head_owned: Vec<Array2<f32>> = heading_deg
+        .iter()
+        .map(|a| a.as_array().to_owned())
+        .collect();
 
     let decomposed = py
         .allow_threads(|| {
@@ -336,12 +361,18 @@ fn decompose_per_pixel<'py>(
             let geoms: Vec<PerPixelGeometry<'_>> = inc_owned
                 .iter()
                 .zip(head_owned.iter())
-                .map(|(incidence_deg, heading_deg)| PerPixelGeometry { incidence_deg, heading_deg })
+                .map(|(incidence_deg, heading_deg)| PerPixelGeometry {
+                    incidence_deg,
+                    heading_deg,
+                })
                 .collect();
             core_decompose_per_pixel(&los_refs, &geoms)
         })
         .map_err(err)?;
-    Ok((decomposed.up.into_pyarray_bound(py), decomposed.east.into_pyarray_bound(py)))
+    Ok((
+        decomposed.up.into_pyarray_bound(py),
+        decomposed.east.into_pyarray_bound(py),
+    ))
 }
 
 /// Descriptores por píxel para ML (velocidad, aceleración, estacionalidad,
@@ -373,8 +404,14 @@ fn extract_features<'py>(
         epochs: epoch_days.iter().map(|&d| epoch_from_day(d)).collect(),
         meta: dummy_meta(wavelength_m, 39.0),
     };
-    let config = FeatureConfig { seasonal, acceleration, min_valid_epochs };
-    let maps = py.allow_threads(|| core_extract_features(&ds, None, &config)).map_err(err)?;
+    let config = FeatureConfig {
+        seasonal,
+        acceleration,
+        min_valid_epochs,
+    };
+    let maps = py
+        .allow_threads(|| core_extract_features(&ds, None, &config))
+        .map_err(err)?;
 
     let names = maps.feature_names();
     let dict = PyDict::new_bound(py);
@@ -389,7 +426,10 @@ fn extract_features<'py>(
             "seasonal_amplitude" => &maps.seasonal_amplitude,
             "seasonal_phase" => &maps.seasonal_phase,
             "max_step" => &maps.max_step,
-            "temporal_coherence" => maps.temporal_coherence.as_ref().expect("nombre presente solo si Some"),
+            "temporal_coherence" => maps
+                .temporal_coherence
+                .as_ref()
+                .expect("nombre presente solo si Some"),
             other => unreachable!("feature_names() produjo un nombre desconocido: {other}"),
         };
         dict.set_item(name, value.clone().into_pyarray_bound(py))?;
@@ -419,7 +459,8 @@ fn remove_ramp<'py>(
     };
     let mut owned: Array2<f32> = data.as_array().to_owned();
     let mask_owned: Option<Array2<bool>> = mask.map(|m| m.as_array().to_owned());
-    py.allow_threads(|| core_remove_ramp(&mut owned, kind, mask_owned.as_ref())).map_err(err)?;
+    py.allow_threads(|| core_remove_ramp(&mut owned, kind, mask_owned.as_ref()))
+        .map_err(err)?;
     Ok(owned.into_pyarray_bound(py))
 }
 
@@ -445,7 +486,11 @@ fn correct_unwrap_errors<'py>(
     let pairs: Vec<IfgPair> = refs
         .iter()
         .zip(&secs)
-        .map(|(&r, &s)| IfgPair { reference: r, secondary: s, perp_baseline_m: 0.0 })
+        .map(|(&r, &s)| IfgPair {
+            reference: r,
+            secondary: s,
+            perp_baseline_m: 0.0,
+        })
         .collect();
     let n = data.len_of(Axis(0));
     let mut stack = UnwrappedStack {
@@ -454,8 +499,14 @@ fn correct_unwrap_errors<'py>(
         pairs,
         meta: dummy_meta(SENTINEL1_WAVELENGTH_M, 39.0),
     };
-    let report = py.allow_threads(|| core_correct_unwrap_errors(&mut stack)).map_err(err)?;
-    Ok((stack.data.into_pyarray_bound(py), report.corrected, report.detected_uncorrected))
+    let report = py
+        .allow_threads(|| core_correct_unwrap_errors(&mut stack))
+        .map_err(err)?;
+    Ok((
+        stack.data.into_pyarray_bound(py),
+        report.corrected,
+        report.detected_uncorrected,
+    ))
 }
 
 #[pymodule]

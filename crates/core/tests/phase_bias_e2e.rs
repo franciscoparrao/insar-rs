@@ -32,11 +32,11 @@ use std::path::Path;
 
 use insar_core::phase_bias::PhaseBiasConfig;
 use insar_core::pipeline::PhaseBiasStage;
-use insar_core::pipeline::{run_sbas, SbasPipelineConfig};
+use insar_core::pipeline::{SbasPipelineConfig, run_sbas};
 use insar_core::types::SENTINEL1_WAVELENGTH_M;
 
 use surtgis_core::io::write_geotiff;
-use surtgis_core::{Raster, CRS, GeoTransform};
+use surtgis_core::{CRS, GeoTransform, Raster};
 
 const N_EPOCHS: usize = 10;
 const MAX_SPAN: usize = 3;
@@ -92,7 +92,8 @@ fn generate_stack(dir: &Path, with_bias: bool) {
     let mut ifg_entries = String::new();
     for (idx, &(reference, secondary)) in pairs.iter().enumerate() {
         let span = secondary - reference;
-        let dd = V_TRUE * (years_since_start(&dates, secondary) - years_since_start(&dates, reference));
+        let dd =
+            V_TRUE * (years_since_start(&dates, secondary) - years_since_start(&dates, reference));
         let phi_def = -4.0 * PI / SENTINEL1_WAVELENGTH_M * dd;
         let bias = if with_bias {
             let coef = if span == 1 { 1.0 } else { A[span - 2] };
@@ -210,7 +211,11 @@ fn run_e2e(base: &Path) {
         report.closure_rms_before,
         report.closure_rms_after
     );
-    assert_eq!(report.pixels_corrected, GRID * GRID, "toda la grilla es válida");
+    assert_eq!(
+        report.pixels_corrected,
+        GRID * GRID,
+        "toda la grilla es válida"
+    );
     assert_eq!(report.pixels_skipped, 0);
     assert_eq!(report.coefficients, A.to_vec());
     assert!(

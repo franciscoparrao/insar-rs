@@ -10,7 +10,9 @@ use std::path::PathBuf;
 
 use chrono::NaiveDate;
 use insar_core::io::licsar::{Aoi, LicsarLoadConfig, read_licsar_stack};
-use insar_core::phase_bias::{PhaseBiasConfig, closure_rms, correct_phase_bias, estimate_coefficients};
+use insar_core::phase_bias::{
+    PhaseBiasConfig, closure_rms, correct_phase_bias, estimate_coefficients,
+};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dir = PathBuf::from(
@@ -21,11 +23,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let d = |s: &str| NaiveDate::parse_from_str(s, "%Y%m%d").unwrap();
 
     // AOI: valle agrícola/forestal de Ñuble en torno a Chillán (~36.6°S).
-    let aoi = Aoi { min_lon: -72.20, max_lon: -71.80, min_lat: -36.80, max_lat: -36.40 };
+    let aoi = Aoi {
+        min_lon: -72.20,
+        max_lon: -71.80,
+        min_lat: -36.80,
+        max_lat: -36.40,
+    };
 
     // ── Fase 1: estimar coeficientes sobre toda la red descargada (tiene un
     //    par ancla teselable de span 12). ────────────────────────────────
-    let load_full = LicsarLoadConfig { aoi: Some(aoi), ..LicsarLoadConfig::default() };
+    let load_full = LicsarLoadConfig {
+        aoi: Some(aoi),
+        ..LicsarLoadConfig::default()
+    };
     let stack_full = read_licsar_stack(&dir, &load_full)?;
     println!(
         "Fase 1 (estimación): {} pares × {:?} px, {} épocas",
@@ -33,11 +43,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         stack_full.dims(),
         stack_full.epochs.len()
     );
-    let cfg_est = PhaseBiasConfig { anchor_days: 72.0, ..PhaseBiasConfig::default() };
+    let cfg_est = PhaseBiasConfig {
+        anchor_days: 72.0,
+        ..PhaseBiasConfig::default()
+    };
     let est = estimate_coefficients(&stack_full, &cfg_est)?;
     println!(
         "  coeficientes aₙ = {:?}  (ancla span {} = {:.0} d, {} anclas)",
-        est.coefficients.iter().map(|c| format!("{c:.3}")).collect::<Vec<_>>(),
+        est.coefficients
+            .iter()
+            .map(|c| format!("{c:.3}"))
+            .collect::<Vec<_>>(),
         est.anchor_span,
         est.anchor_days,
         est.n_anchors,

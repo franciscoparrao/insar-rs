@@ -165,7 +165,10 @@ impl DisplacementSeries {
     /// cálculo (`Epoch::years_since` contra `epochs[0]`) que antes se repetía
     /// en cada función de ajuste temporal.
     pub fn epoch_years(&self) -> Vec<f64> {
-        self.epochs.iter().map(|e| e.years_since(&self.epochs[0])).collect()
+        self.epochs
+            .iter()
+            .map(|e| e.years_since(&self.epochs[0]))
+            .collect()
     }
 }
 
@@ -246,7 +249,11 @@ mod tests {
     #[test]
     fn baseline_temporal() {
         let e = epochs();
-        let pair = IfgPair { reference: 0, secondary: 1, perp_baseline_m: 50.0 };
+        let pair = IfgPair {
+            reference: 0,
+            secondary: 1,
+            perp_baseline_m: 50.0,
+        };
         assert_eq!(pair.temporal_baseline_days(&e), 12);
     }
 
@@ -255,7 +262,11 @@ mod tests {
         let stack = UnwrappedStack {
             data: Array3::zeros((1, 4, 4)),
             epochs: epochs(),
-            pairs: vec![IfgPair { reference: 0, secondary: 9, perp_baseline_m: 0.0 }],
+            pairs: vec![IfgPair {
+                reference: 0,
+                secondary: 9,
+                perp_baseline_m: 0.0,
+            }],
             meta: meta(),
         };
         assert!(stack.validate().is_err());
@@ -266,7 +277,11 @@ mod tests {
         let stack = UnwrappedStack {
             data: Array3::zeros((2, 4, 4)),
             epochs: epochs(),
-            pairs: vec![IfgPair { reference: 0, secondary: 1, perp_baseline_m: 0.0 }],
+            pairs: vec![IfgPair {
+                reference: 0,
+                secondary: 1,
+                perp_baseline_m: 0.0,
+            }],
             meta: meta(),
         };
         assert!(stack.validate().is_err());
@@ -282,7 +297,11 @@ mod tests {
         let stack = UnwrappedStack {
             data: Array3::zeros((1, 4, 4)),
             epochs: epochs(),
-            pairs: vec![IfgPair { reference: 1, secondary: 0, perp_baseline_m: 0.0 }],
+            pairs: vec![IfgPair {
+                reference: 1,
+                secondary: 0,
+                perp_baseline_m: 0.0,
+            }],
             meta: meta(),
         };
         assert!(matches!(
@@ -300,8 +319,16 @@ mod tests {
             data: Array3::zeros((2, 4, 4)),
             epochs: epochs(),
             pairs: vec![
-                IfgPair { reference: 0, secondary: 1, perp_baseline_m: 0.0 },
-                IfgPair { reference: 0, secondary: 1, perp_baseline_m: 5.0 },
+                IfgPair {
+                    reference: 0,
+                    secondary: 1,
+                    perp_baseline_m: 0.0,
+                },
+                IfgPair {
+                    reference: 0,
+                    secondary: 1,
+                    perp_baseline_m: 5.0,
+                },
             ],
             meta: meta(),
         };

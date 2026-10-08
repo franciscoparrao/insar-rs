@@ -110,9 +110,8 @@ struct StackManifest {
 fn load_manifest(dir: &Path) -> Result<(StackManifest, Vec<Epoch>)> {
     let path = dir.join(MANIFEST_NAME);
     let text = fs::read_to_string(&path).with_path(&path)?;
-    let manifest: StackManifest = serde_json::from_str(&text).map_err(|e| {
-        InsarError::Metadata(format!("{} malformado: {e}", path.display()))
-    })?;
+    let manifest: StackManifest = serde_json::from_str(&text)
+        .map_err(|e| InsarError::Metadata(format!("{} malformado: {e}", path.display())))?;
 
     if !(manifest.wavelength_m.is_finite() && manifest.wavelength_m > 0.0) {
         return Err(InsarError::Metadata(format!(
@@ -126,9 +125,9 @@ fn load_manifest(dir: &Path) -> Result<(StackManifest, Vec<Epoch>)> {
 
     let mut epochs = Vec::with_capacity(manifest.epochs.len());
     for s in &manifest.epochs {
-        let date = s.parse().map_err(|e| {
-            InsarError::Metadata(format!("época '{s}' no es fecha ISO-8601: {e}"))
-        })?;
+        let date = s
+            .parse()
+            .map_err(|e| InsarError::Metadata(format!("época '{s}' no es fecha ISO-8601: {e}")))?;
         epochs.push(Epoch(date));
     }
 
@@ -240,7 +239,9 @@ fn accumulate_layers<T>(
 pub fn read_ifg_stack(dir: &Path) -> Result<IfgStack> {
     let (manifest, epochs) = load_manifest(dir)?;
     let entries = manifest.ifgs.as_deref().ok_or_else(|| {
-        InsarError::Metadata("stack.json no tiene campo 'ifgs' (requerido para read_ifg_stack)".into())
+        InsarError::Metadata(
+            "stack.json no tiene campo 'ifgs' (requerido para read_ifg_stack)".into(),
+        )
     })?;
     if entries.is_empty() {
         return Err(InsarError::Metadata("campo 'ifgs' vacío".into()));
@@ -279,7 +280,12 @@ pub fn read_ifg_stack(dir: &Path) -> Result<IfgStack> {
 
     // entries no está vacío → meta está definida.
     let meta = meta.expect("meta definida: entries no vacío");
-    let stack = IfgStack { data, epochs, pairs, meta };
+    let stack = IfgStack {
+        data,
+        epochs,
+        pairs,
+        meta,
+    };
     stack.validate()?;
     Ok(stack)
 }
@@ -361,14 +367,11 @@ pub fn read_coherence_stack(dir: &Path) -> Result<Option<Array3<f32>>> {
 
 /// Convierte una capa 2D `f32` + metadata del stack en un `Raster` surtgis
 /// listo para escribir (nodata = NaN).
-fn raster_from_layer(
-    layer: ndarray::ArrayView2<'_, f32>,
-    meta: &StackMeta,
-) -> Result<Raster<f32>> {
+fn raster_from_layer(layer: ndarray::ArrayView2<'_, f32>, meta: &StackMeta) -> Result<Raster<f32>> {
     let (rows, cols) = layer.dim();
     let data: Vec<f32> = layer.iter().copied().collect();
-    let mut raster = Raster::from_vec(data, rows, cols)
-        .map_err(|e| InsarError::Raster(e.to_string()))?;
+    let mut raster =
+        Raster::from_vec(data, rows, cols).map_err(|e| InsarError::Raster(e.to_string()))?;
     raster.set_transform(meta.transform);
     raster.set_crs(meta.crs.clone());
     raster.set_nodata(Some(f32::NAN));
@@ -418,7 +421,11 @@ pub fn read_velocity(path: &Path, meta: StackMeta) -> Result<VelocityMap> {
     let (rows, cols) = raster.shape();
     let data = Array2::from_shape_vec((rows, cols), raster.data().iter().copied().collect())
         .map_err(|e| InsarError::DimensionMismatch(e.to_string()))?;
-    let meta = StackMeta { transform: *raster.transform(), crs: raster.crs().cloned(), ..meta };
+    let meta = StackMeta {
+        transform: *raster.transform(),
+        crs: raster.crs().cloned(),
+        ..meta
+    };
     Ok(VelocityMap { data, meta })
 }
 
@@ -461,7 +468,11 @@ pub fn read_series(dir: &Path, meta: StackMeta) -> Result<DisplacementSeries> {
     })?;
 
     let (transform, crs) = geo.expect("geo definida: entries no vacío");
-    let meta = StackMeta { transform, crs, ..meta };
+    let meta = StackMeta {
+        transform,
+        crs,
+        ..meta
+    };
     Ok(DisplacementSeries { data, epochs, meta })
 }
 
@@ -478,10 +489,7 @@ mod tests {
     /// Directorio temporal único por test (sin crate tempfile). Se limpia
     /// al inicio por si quedó basura de una corrida anterior.
     fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "insar_io_test_{}_{name}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("insar_io_test_{}_{name}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("crear dir temporal de test");
         dir
@@ -505,10 +513,7 @@ mod tests {
     }
 
     fn assert_f32_eq_nan(a: f32, b: f32, ctx: &str) {
-        assert!(
-            (a.is_nan() && b.is_nan()) || a == b,
-            "{ctx}: {a} != {b}"
-        );
+        assert!((a.is_nan() && b.is_nan()) || a == b, "{ctx}: {a} != {b}");
     }
 
     const ROWS: usize = 4;
@@ -631,11 +636,7 @@ mod tests {
             for r in 0..ROWS {
                 for c in 0..COLS {
                     let exp = synth(k, r, c).abs();
-                    assert_f32_eq_nan(
-                        stack.data[[k, r, c]],
-                        exp,
-                        &format!("amp[{k},{r},{c}]"),
-                    );
+                    assert_f32_eq_nan(stack.data[[k, r, c]], exp, &format!("amp[{k},{r},{c}]"));
                 }
             }
         }
@@ -689,9 +690,13 @@ mod tests {
         };
         write_series(&series, &dir).unwrap();
 
-        for (k, name) in ["disp_20230101.tif", "disp_20230113.tif", "disp_20230125.tif"]
-            .iter()
-            .enumerate()
+        for (k, name) in [
+            "disp_20230101.tif",
+            "disp_20230113.tif",
+            "disp_20230125.tif",
+        ]
+        .iter()
+        .enumerate()
         {
             let back: Raster<f32> = read_geotiff(dir.join(name), None).unwrap();
             assert_eq!(back.shape(), (ROWS, COLS), "{name}");
@@ -852,7 +857,9 @@ mod tests {
                 COLS,
             );
         }
-        let coh = read_coherence_stack(&dir).unwrap().expect("coherencia presente");
+        let coh = read_coherence_stack(&dir)
+            .unwrap()
+            .expect("coherencia presente");
         assert_eq!(coh.shape(), &[2, ROWS, COLS]);
         assert_eq!(coh[[0, 1, 1]], 0.9);
         assert_eq!(coh[[1, 2, 3]], 0.6);
@@ -932,7 +939,10 @@ mod tests {
             3,
         );
         let err = read_ifg_stack(&dir).unwrap_err();
-        assert!(matches!(err, InsarError::DimensionMismatch(_)), "got: {err:?}");
+        assert!(
+            matches!(err, InsarError::DimensionMismatch(_)),
+            "got: {err:?}"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -942,7 +952,10 @@ mod tests {
         build_synthetic_stack(&dir);
         write_test_tif(&dir.join("amp_20230113.tif"), vec![1.0; 2 * 7], 2, 7);
         let err = read_amplitude_stack(&dir).unwrap_err();
-        assert!(matches!(err, InsarError::DimensionMismatch(_)), "got: {err:?}");
+        assert!(
+            matches!(err, InsarError::DimensionMismatch(_)),
+            "got: {err:?}"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 

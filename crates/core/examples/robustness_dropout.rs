@@ -33,7 +33,10 @@ fn main() {
     };
     let stack = read_isce_unwrapped_stack(Path::new(&ifg_dir), &config).expect("lectura ISCE");
     let (np, nr, nc) = (stack.pairs.len(), stack.dims().0, stack.dims().1);
-    println!("Stack: {} épocas, {np} pares, {nr}×{nc}", stack.epochs.len());
+    println!(
+        "Stack: {} épocas, {np} pares, {nr}×{nc}",
+        stack.epochs.len()
+    );
 
     // Inversión con red completa.
     let vel_full = estimate_velocity(&invert_sbas(&stack, None).unwrap()).unwrap();
@@ -51,7 +54,10 @@ fn main() {
             }
         }
     }
-    println!("Descartados {:.1}% de las observaciones (par, píxel)", 100.0 * n_drop as f64 / (np * nr * nc) as f64);
+    println!(
+        "Descartados {:.1}% de las observaciones (par, píxel)",
+        100.0 * n_drop as f64 / (np * nr * nc) as f64
+    );
 
     let t = std::time::Instant::now();
     let vel_drop = estimate_velocity(&invert_sbas(&dropped, None).unwrap()).unwrap();

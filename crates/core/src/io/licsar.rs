@@ -151,7 +151,11 @@ pub fn read_licsar_stack(dir: &Path, config: &LicsarLoadConfig) -> Result<IfgSta
             )));
         }
         let (out_rows, out_cols) = (r1 - r0, c1 - c0);
-        check_dims(tif, (out_rows, out_cols), expected.unwrap_or((out_rows, out_cols)))?;
+        check_dims(
+            tif,
+            (out_rows, out_cols),
+            expected.unwrap_or((out_rows, out_cols)),
+        )?;
 
         // Coherencia opcional (Byte 0–255).
         let cc = if thr > 0.0 {
@@ -237,7 +241,9 @@ fn discover_pairs(
         {
             continue;
         }
-        let tif = entry.path().join(format!("{name}.{}", config.product.suffix()));
+        let tif = entry
+            .path()
+            .join(format!("{name}.{}", config.product.suffix()));
         if tif.is_file() {
             found.push((a, b, tif));
         }
@@ -279,7 +285,11 @@ pub fn read_licsar_coherence(dir: &Path, config: &LicsarLoadConfig) -> Result<Ar
         }
         let (r0, r1, c0, c1) = window.unwrap();
         let (out_rows, out_cols) = (r1 - r0, c1 - c0);
-        check_dims(&cc_path, (out_rows, out_cols), expected.unwrap_or((out_rows, out_cols)))?;
+        check_dims(
+            &cc_path,
+            (out_rows, out_cols),
+            expected.unwrap_or((out_rows, out_cols)),
+        )?;
         let arr = cc.data();
         let mut vals = Vec::with_capacity(out_rows * out_cols);
         for r in r0..r1 {
@@ -342,7 +352,12 @@ mod tests {
         std::fs::create_dir_all(&d).unwrap();
         let mut r = Raster::from_vec(phase.to_vec(), rows, cols).unwrap();
         r.set_transform(GeoTransform::new(-72.0, -34.0, 0.001, -0.001));
-        write_geotiff(&r, d.join(format!("{pair}.geo.diff_unfiltered_pha.tif")), None).unwrap();
+        write_geotiff(
+            &r,
+            d.join(format!("{pair}.geo.diff_unfiltered_pha.tif")),
+            None,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -362,7 +377,11 @@ mod tests {
         assert_eq!(stack.dims(), (rows, cols));
         // Orden (ref, sec): (0,1), (0,2), (1,2).
         assert_eq!(
-            stack.pairs.iter().map(|p| (p.reference, p.secondary)).collect::<Vec<_>>(),
+            stack
+                .pairs
+                .iter()
+                .map(|p| (p.reference, p.secondary))
+                .collect::<Vec<_>>(),
             vec![(0, 1), (0, 2), (1, 2)]
         );
         // Primer par, píxel 0: exp(i·0.5).

@@ -159,8 +159,9 @@ impl GacosGrid {
 
     /// Igual que [`Self::read`] con una cabecera ya parseada.
     pub fn read_with_header(ztd_path: &Path, header: &RscHeader) -> Result<Self> {
-        let bytes = fs::read(ztd_path)
-            .map_err(|e| InsarError::Raster(format!("no se pudo leer {}: {e}", ztd_path.display())))?;
+        let bytes = fs::read(ztd_path).map_err(|e| {
+            InsarError::Raster(format!("no se pudo leer {}: {e}", ztd_path.display()))
+        })?;
         let expected = header.width * header.file_length * 4;
         if bytes.len() != expected {
             return Err(InsarError::Raster(format!(
@@ -494,7 +495,11 @@ pub fn correct_gacos_series(
         epochs_found,
         epochs_missing,
         epochs_skipped,
-        coverage: if total > 0.0 { applied as f64 / total } else { 0.0 },
+        coverage: if total > 0.0 {
+            applied as f64 / total
+        } else {
+            0.0
+        },
         mean_abs_correction_m: sum_abs / applied as f64,
     })
 }
@@ -617,10 +622,7 @@ mod tests {
                 assert!(v.is_finite(), "({r},{c}) fuera de cobertura y no debería");
                 let lon = -71.45 + (c as f64 + 0.5) * 0.0025;
                 let want = 2.4 + 8.0 * (lon + 71.5);
-                assert!(
-                    (v as f64 - want).abs() < 1e-4,
-                    "({r},{c}) {v} vs {want}"
-                );
+                assert!((v as f64 - want).abs() < 1e-4, "({r},{c}) {v} vs {want}");
                 checked += 1;
             }
         }
@@ -651,10 +653,18 @@ mod tests {
         assert_eq!(rep.epochs_found, 2);
         assert!(rep.epochs_missing.is_empty());
         // Época de referencia: corrección nula.
-        assert!(s.data.index_axis(Axis(0), 0).iter().all(|&v| v.abs() < 1e-6));
+        assert!(
+            s.data
+                .index_axis(Axis(0), 0)
+                .iter()
+                .all(|&v| v.abs() < 1e-6)
+        );
         // Segunda época: +50 mm (signo positivo, ver nota de módulo).
         let v = s.data[[1, 3, 3]];
-        assert!((v - 0.05).abs() < 1e-4, "corrección {v}, se esperaba +0.05 m");
+        assert!(
+            (v - 0.05).abs() < 1e-4,
+            "corrección {v}, se esperaba +0.05 m"
+        );
         fs::remove_dir_all(&d).ok();
     }
 
@@ -675,7 +685,10 @@ mod tests {
         );
         // Y en otra columna debe quedar solo la DIFERENCIA respecto de ella.
         let v = s.data[[1, 2, 4]];
-        assert!((v - 0.02).abs() < 1e-4, "corrección {v}, se esperaba +0.02 m");
+        assert!(
+            (v - 0.02).abs() < 1e-4,
+            "corrección {v}, se esperaba +0.02 m"
+        );
         fs::remove_dir_all(&d).ok();
     }
 
@@ -774,7 +787,11 @@ mod tests {
         // La época saltada queda intacta; la sana, corregida con el doble
         // diferencial: (0.01·col) − (0.01·2) = +0.02 m en la columna 4.
         assert!(s.data.index_axis(Axis(0), 1).iter().all(|&v| v == 0.0));
-        assert!((s.data[[2, 4, 4]] - 0.02).abs() < 1e-4, "época sana: {}", s.data[[2, 4, 4]]);
+        assert!(
+            (s.data[[2, 4, 4]] - 0.02).abs() < 1e-4,
+            "época sana: {}",
+            s.data[[2, 4, 4]]
+        );
         fs::remove_dir_all(&d).ok();
     }
 

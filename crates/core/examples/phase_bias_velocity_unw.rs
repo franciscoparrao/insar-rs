@@ -15,7 +15,9 @@ use std::f32::consts::PI;
 use std::path::PathBuf;
 
 use chrono::NaiveDate;
-use insar_core::inversion::{estimate_velocity, invert_sbas, reference_to_pixel, select_reference_pixel};
+use insar_core::inversion::{
+    estimate_velocity, invert_sbas, reference_to_pixel, select_reference_pixel,
+};
 use insar_core::io::licsar::{Aoi, LicsarLoadConfig, read_licsar_coherence, read_licsar_stack};
 use insar_core::phase_bias::{PhaseBiasConfig, correct_phase_bias, estimate_coefficients};
 use insar_core::types::{IfgStack, UnwrappedStack};
@@ -34,7 +36,13 @@ fn unwrap(
     Ok(match method {
         "snaphu" => {
             let binary = std::env::var("SNAPHU_BIN").unwrap_or_else(|_| "snaphu".into());
-            unwrap_stack_snaphu(stack, Some(coh), &SnaphuConfig { binary: PathBuf::from(binary) })?
+            unwrap_stack_snaphu(
+                stack,
+                Some(coh),
+                &SnaphuConfig {
+                    binary: PathBuf::from(binary),
+                },
+            )?
         }
         "quality" => unwrap_stack_min_quality(stack, Some(coh), Some(MIN_QUALITY))?,
         m => return Err(format!("método desconocido: {m} (snaphu|quality)").into()),
@@ -114,24 +122,47 @@ fn write_f32(a: &Array2<f32>, path: &std::path::Path) -> std::io::Result<()> {
 /// `PB_COEFS="a2,a3"` fija los aₙ (p. ej. Maghsoudi 2025 Fig. 11, base 12 d);
 /// sin la variable se estiman de la red completa como en el paper original.
 fn coefs_from_env() -> Option<Vec<f64>> {
-    std::env::var("PB_COEFS").ok().map(|v| v.split(',').map(|x| x.trim().parse().expect("PB_COEFS")).collect())
+    std::env::var("PB_COEFS").ok().map(|v| {
+        v.split(',')
+            .map(|x| x.trim().parse().expect("PB_COEFS"))
+            .collect()
+    })
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
-    let dir = PathBuf::from(args.next().unwrap_or_else(|| "data/licsar_083D_12636/GEOC".into()));
+    let dir = PathBuf::from(
+        args.next()
+            .unwrap_or_else(|| "data/licsar_083D_12636/GEOC".into()),
+    );
     let method = args.next().unwrap_or_else(|| "snaphu".into());
     let d = |s: &str| NaiveDate::parse_from_str(s, "%Y%m%d").unwrap();
-    let aoi = Aoi { min_lon: -72.20, max_lon: -71.80, min_lat: -36.80, max_lat: -36.40 };
+    let aoi = Aoi {
+        min_lon: -72.20,
+        max_lon: -71.80,
+        min_lat: -36.80,
+        max_lat: -36.40,
+    };
 
     // Coeficientes: mismos que el paper (red completa, ancla de 72 d).
     let coefficients = match coefs_from_env() {
         Some(a) => a,
-        None => estimate_coefficients(
-        &read_licsar_stack(&dir, &LicsarLoadConfig { aoi: Some(aoi), ..Default::default() })?,
-        &PhaseBiasConfig { anchor_days: 72.0, ..Default::default() },
-        )?
-        .coefficients,
+        None => {
+            estimate_coefficients(
+                &read_licsar_stack(
+                    &dir,
+                    &LicsarLoadConfig {
+                        aoi: Some(aoi),
+                        ..Default::default()
+                    },
+                )?,
+                &PhaseBiasConfig {
+                    anchor_days: 72.0,
+                    ..Default::default()
+                },
+            )?
+            .coefficients
+        }
     };
     println!("coeficientes aₙ = {:?}", coefficients);
 
@@ -145,7 +176,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut stack_c = stack_b.clone();
     correct_phase_bias(
         &mut stack_c,
-        &PhaseBiasConfig { coefficients: Some(coefficients.clone()), ..Default::default() },
+        &PhaseBiasConfig {
+            coefficients: Some(coefficients.clone()),
+            ..Default::default()
+        },
     )?;
     let refrc = select_reference_pixel(&coh, None).ok_or("sin píxel de referencia válido")?;
     let gt = stack_b.meta.transform;
@@ -161,12 +195,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let t0 = std::time::Instant::now();
     let unw_b = unwrap(&stack_b, &coh, &method)?;
     let unw_c = unwrap(&stack_c, &coh, &method)?;
-    println!("desenrollado ({method}, 2 caminos): {:.1} s", t0.elapsed().as_secs_f64());
+    println!(
+        "desenrollado ({method}, 2 caminos): {:.1} s",
+        t0.elapsed().as_secs_f64()
+    );
 
     let (changed_px, changed_layer) = cycle_changes(&stack_b, &stack_c, &unw_b, &unw_c);
     let frac_mean = changed_layer.iter().filter(|v| v.is_finite()).sum::<f64>()
-        / changed_layer.iter().filter(|v| v.is_finite()).count().max(1) as f64;
-    let frac_max = changed_layer.iter().cloned().filter(|v| v.is_finite()).fold(0.0, f64::max);
+        / changed_layer
+            .iter()
+            .filter(|v| v.is_finite())
+            .count()
+            .max(1) as f64;
+    let frac_max = changed_layer
+        .iter()
+        .cloned()
+        .filter(|v| v.is_finite())
+        .fold(0.0, f64::max);
     println!(
         "cambio de ciclo por la corrección: media {:.2} % de celdas por capa, máx {:.2} %",
         100.0 * frac_mean,
@@ -219,7 +264,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "cycle_change_frac_per_layer": changed_layer,
         "pairs": stack_b.pairs.iter().map(|p| format!("{}_{}", p.reference, p.secondary)).collect::<Vec<_>>(),
     });
-    std::fs::write(out.join("summary.json"), serde_json::to_string_pretty(&summary)?)?;
+    std::fs::write(
+        out.join("summary.json"),
+        serde_json::to_string_pretty(&summary)?,
+    )?;
     println!("salida en {}", out.display());
     Ok(())
 }

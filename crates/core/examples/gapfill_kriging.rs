@@ -16,19 +16,25 @@ use geostat_core::{
 use serde::Deserialize;
 
 #[derive(Deserialize)]
-struct Meta { rows: usize, cols: usize }
+struct Meta {
+    rows: usize,
+    cols: usize,
+}
 
 fn read_f32(p: &Path, n: usize) -> Vec<f32> {
     let mut b = Vec::new();
     fs::File::open(p).unwrap().read_to_end(&mut b).unwrap();
     assert_eq!(b.len(), n * 4);
-    b.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
+    b.chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect()
 }
 
 fn main() {
     let dir = std::env::args().nth(1).expect("export_dir");
     let dir = Path::new(&dir);
-    let meta: Meta = serde_json::from_str(&fs::read_to_string(dir.join("meta.json")).unwrap()).unwrap();
+    let meta: Meta =
+        serde_json::from_str(&fs::read_to_string(dir.join("meta.json")).unwrap()).unwrap();
     let (nr, nc) = (meta.rows, meta.cols);
     let vel = read_f32(&dir.join("velocity.f32"), nr * nc);
     let tcoh = read_f32(&dir.join("tcoh.f32"), nr * nc);
@@ -49,24 +55,46 @@ fn main() {
             }
         }
     }
-    println!("coherentes (muestras): {}  huecos a rellenar: {}  ({:.0}% de la grilla)",
-             cv.len(), gaps.len(), 100.0 * gaps.len() as f64 / (nr * nc) as f64);
+    println!(
+        "coherentes (muestras): {}  huecos a rellenar: {}  ({:.0}% de la grilla)",
+        cv.len(),
+        gaps.len(),
+        100.0 * gaps.len() as f64 / (nr * nc) as f64
+    );
 
     // Submuestreo de condicionamiento por velocidad (kriging usa vecindarios kd-tree).
     let stride = (cv.len() / 12000).max(1);
     let (sx, sy, sv): (Vec<f64>, Vec<f64>, Vec<f64>) = (0..cv.len())
         .step_by(stride)
         .map(|i| (cx[i], cy[i], cv[i]))
-        .fold((vec![], vec![], vec![]), |(mut a, mut b, mut c), (x, y, v)| {
-            a.push(x); b.push(y); c.push(v); (a, b, c)
-        });
+        .fold(
+            (vec![], vec![], vec![]),
+            |(mut a, mut b, mut c), (x, y, v)| {
+                a.push(x);
+                b.push(y);
+                c.push(v);
+                (a, b, c)
+            },
+        );
     let data = PointSet::<2>::from_xyz(&sx, &sy, &sv).unwrap();
     println!("condicionamiento: {} puntos (stride {stride})", sv.len());
 
     // Variograma experimental + ajuste automático (mejor familia).
-    let vcfg = VariogramConfig { n_lags: 15, max_dist: (nr.min(nc) as f64) / 3.0, direction: None };
+    let vcfg = VariogramConfig {
+        n_lags: 15,
+        max_dist: (nr.min(nc) as f64) / 3.0,
+        direction: None,
+    };
     let exp = experimental_variogram(&data, &vcfg).unwrap();
-    let fit = fit_best(&exp, &[ModelKind::Spherical, ModelKind::Exponential, ModelKind::Gaussian]).unwrap();
+    let fit = fit_best(
+        &exp,
+        &[
+            ModelKind::Spherical,
+            ModelKind::Exponential,
+            ModelKind::Gaussian,
+        ],
+    )
+    .unwrap();
     println!("variograma ajustado (wsse={:.3})", fit.wsse);
 
     // Kriging ordinario, vecindario de 40 puntos.
@@ -81,13 +109,19 @@ fn main() {
     let t = std::time::Instant::now();
     let targets: Vec<[f64; 2]> = gaps.iter().map(|&(r, c)| [c as f64, r as f64]).collect();
     let est = kr.predict_many(&targets);
-    println!("kriging de {} huecos: {:.1}s", targets.len(), t.elapsed().as_secs_f64());
+    println!(
+        "kriging de {} huecos: {:.1}s",
+        targets.len(),
+        t.elapsed().as_secs_f64()
+    );
 
     // Campo relleno (cm/año) + mapa de desviación estándar de kriging (cm/año).
     let mut filled = vec![f32::NAN; nr * nc];
     let mut kstd = vec![0.0f32; nr * nc];
     for i in 0..nr * nc {
-        if coherent(i) { filled[i] = vel[i] * 100.0; }
+        if coherent(i) {
+            filled[i] = vel[i] * 100.0;
+        }
     }
     for (k, &(r, c)) in gaps.iter().enumerate() {
         filled[r * nc + c] = est[k].value as f32;
@@ -95,11 +129,19 @@ fn main() {
     }
     let write = |name: &str, d: &[f32]| {
         let mut b = Vec::with_capacity(d.len() * 4);
-        for &v in d { b.extend_from_slice(&v.to_le_bytes()); }
+        for &v in d {
+            b.extend_from_slice(&v.to_le_bytes());
+        }
         fs::write(dir.join(name), b).unwrap();
     };
     write("velocity_filled.f32", &filled);
     write("kriging_std.f32", &kstd);
-    let gap_std: f64 = gaps.iter().map(|&(r, c)| kstd[r * nc + c] as f64).sum::<f64>() / gaps.len() as f64;
-    println!("OK → velocity_filled.f32 + kriging_std.f32  (σ_kriging media en huecos = {gap_std:.2} cm/año)");
+    let gap_std: f64 = gaps
+        .iter()
+        .map(|&(r, c)| kstd[r * nc + c] as f64)
+        .sum::<f64>()
+        / gaps.len() as f64;
+    println!(
+        "OK → velocity_filled.f32 + kriging_std.f32  (σ_kriging media en huecos = {gap_std:.2} cm/año)"
+    );
 }

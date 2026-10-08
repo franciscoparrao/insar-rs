@@ -203,10 +203,13 @@ fn mask_outliers(topo: &ClosureTopology, vals: &mut [Option<f64>], k: f64) {
                     .map(|&o| vals[o].unwrap())
                     .fold((0.0, 0.0), |(s, c), v| (s + v.sin(), c + v.cos()));
                 let d = vals[idx[j]].unwrap() - s.atan2(c);
-                (d + std::f64::consts::PI).rem_euclid(2.0 * std::f64::consts::PI) - std::f64::consts::PI
+                (d + std::f64::consts::PI).rem_euclid(2.0 * std::f64::consts::PI)
+                    - std::f64::consts::PI
             })
             .collect();
-        let (s, c) = dev.iter().fold((0.0, 0.0), |(s, c), d| (s + d.sin(), c + d.cos()));
+        let (s, c) = dev
+            .iter()
+            .fold((0.0, 0.0), |(s, c), d| (s + d.sin(), c + d.cos()));
         let r = (s * s + c * c).sqrt() / dev.len() as f64;
         if r.is_nan() || r <= 0.0 {
             continue;
@@ -354,8 +357,9 @@ impl ClosureTopology {
             .collect();
 
         let n_slots = n_epochs.saturating_sub(1);
-        let unit_layer: Vec<Option<usize>> =
-            (0..n_slots).map(|i| index.get(&(i, i + 1)).copied()).collect();
+        let unit_layer: Vec<Option<usize>> = (0..n_slots)
+            .map(|i| index.get(&(i, i + 1)).copied())
+            .collect();
 
         let mut unit_col = vec![None; n_slots];
         let mut n_unknowns = 0;
@@ -378,11 +382,20 @@ impl ClosureTopology {
                     .collect();
                 let Some(chain) = chain else { continue };
                 let (unit_layers, cols) = chain.into_iter().unzip();
-                obs.push(ClosureObs { span, long_layer, unit_layers, cols });
+                obs.push(ClosureObs {
+                    span,
+                    long_layer,
+                    unit_layers,
+                    cols,
+                });
             }
         }
 
-        ClosureTopology { unit_col, n_unknowns, obs }
+        ClosureTopology {
+            unit_col,
+            n_unknowns,
+            obs,
+        }
     }
 
     /// Matriz de diseño (n_obs × n_unknowns): `(aₙ − 1)` en las columnas de la
@@ -456,10 +469,7 @@ pub fn closure_rms(stack: &IfgStack, max_span: usize) -> Result<(f64, usize)> {
 /// después de [`correct_phase_bias`] muestra **dónde** muerde el sesgo
 /// (cultivo/bosque decorrelacionado vs urbano coherente) sin pasar por el
 /// desenrollado. NaN donde ningún cierre fue evaluable.
-pub fn closure_rms_map(
-    stack: &IfgStack,
-    max_span: usize,
-) -> Result<(Array2<f32>, Array2<u32>)> {
+pub fn closure_rms_map(stack: &IfgStack, max_span: usize) -> Result<(Array2<f32>, Array2<u32>)> {
     stack.validate()?;
     check_span(max_span)?;
     let topo = ClosureTopology::build(stack, max_span);
@@ -847,9 +857,14 @@ pub fn correct_phase_bias(
                 return None;
             }
             // a₁ ≡ 1 para el span unitario (Eq. 11).
-            let coef = if span == 1 { 1.0 } else { coefficients[span - 2] };
-            let cols: Option<Vec<usize>> =
-                (p.reference..p.secondary).map(|i| topo.unit_col[i]).collect();
+            let coef = if span == 1 {
+                1.0
+            } else {
+                coefficients[span - 2]
+            };
+            let cols: Option<Vec<usize>> = (p.reference..p.secondary)
+                .map(|i| topo.unit_col[i])
+                .collect();
             cols.map(|cols| (coef, cols))
         })
         .collect();
@@ -939,10 +954,7 @@ pub fn correct_phase_bias(
 /// validación out-of-sample: p. ej. promediar δ̂ por bloques espaciales y
 /// aplicar la corrección con parámetros ajenos al píxel evaluado (el sesgo
 /// real es espacialmente suave; el sobreajuste por píxel no lo es).
-pub fn estimate_bias_terms(
-    stack: &IfgStack,
-    config: &PhaseBiasConfig,
-) -> Result<Array3<f32>> {
+pub fn estimate_bias_terms(stack: &IfgStack, config: &PhaseBiasConfig) -> Result<Array3<f32>> {
     stack.validate()?;
     check_span(config.max_span)?;
     let coefficients = match &config.coefficients {
@@ -968,8 +980,9 @@ pub fn estimate_bias_terms(
             // sistema rank-deficiente (igual que en `correct_phase_bias`).
             let solve = |outlier: Option<f64>| {
                 let (key, vals) = pixel_closures(&topo, |k| data[[k, r, c]], outlier);
-                let rows: Vec<usize> =
-                    (0..topo.obs.len()).filter(|&o| key[o / 64] & (1u64 << (o % 64)) != 0).collect();
+                let rows: Vec<usize> = (0..topo.obs.len())
+                    .filter(|&o| key[o / 64] & (1u64 << (o % 64)) != 0)
+                    .collect();
                 if rows.len() < topo.n_unknowns {
                     return None;
                 }
@@ -1038,7 +1051,9 @@ pub fn cumulative_bias(stack: &IfgStack, config: &PhaseBiasConfig) -> Result<Arr
             }
             let reduced =
                 DMatrix::from_fn(rows.len(), topo.n_unknowns, |i, j| design[(rows[i], j)]);
-            let Some(pinv) = rcond_pseudo_inverse(reduced) else { continue };
+            let Some(pinv) = rcond_pseudo_inverse(reduced) else {
+                continue;
+            };
             let delta = pinv * DVector::from_vec(vals);
 
             plane[[0, c]] = 0.0;
@@ -1094,7 +1109,7 @@ pub fn high_closure_mask(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{Epoch, IfgPair, StackMeta, SENTINEL1_WAVELENGTH_M};
+    use crate::types::{Epoch, IfgPair, SENTINEL1_WAVELENGTH_M, StackMeta};
     use surtgis_core::GeoTransform;
 
     fn meta() -> StackMeta {
@@ -1109,11 +1124,17 @@ mod tests {
 
     fn epochs(n: usize) -> Vec<Epoch> {
         let start: chrono::NaiveDate = "2023-01-01".parse().unwrap();
-        (0..n).map(|i| Epoch(start + chrono::Duration::days(6 * i as i64))).collect()
+        (0..n)
+            .map(|i| Epoch(start + chrono::Duration::days(6 * i as i64)))
+            .collect()
     }
 
     fn pair(i: usize, j: usize) -> IfgPair {
-        IfgPair { reference: i, secondary: j, perp_baseline_m: 0.0 }
+        IfgPair {
+            reference: i,
+            secondary: j,
+            perp_baseline_m: 0.0,
+        }
     }
 
     /// Red daisy-chain de spans 1..=max_span sobre `n` épocas.
@@ -1154,7 +1175,12 @@ mod tests {
             data.index_axis_mut(Axis(0), k)
                 .fill(Complex32::from_polar(1.0, phi as f32));
         }
-        IfgStack { data, epochs: epochs(n_epochs), pairs, meta: meta() }
+        IfgStack {
+            data,
+            epochs: epochs(n_epochs),
+            pairs,
+            meta: meta(),
+        }
     }
 
     // ---------- topología ----------
@@ -1255,7 +1281,10 @@ mod tests {
         stack.data.push(Axis(0), layer.view()).unwrap();
         stack.pairs.push(pair(0, 12));
 
-        let cfg = PhaseBiasConfig { min_coefficient_pixels: 1, ..Default::default() };
+        let cfg = PhaseBiasConfig {
+            min_coefficient_pixels: 1,
+            ..Default::default()
+        };
         let err = estimate_coefficients(&stack, &cfg).unwrap_err();
         assert!(
             format!("{err}").contains("sesgo de no-cierre detectable"),
@@ -1319,9 +1348,15 @@ mod tests {
         let def: Vec<f64> = (0..n).map(|e| 0.02 * e as f64).collect();
 
         let mut stack = synth(n, 3, &def, &bias, &a_true, 2, 2);
-        let cfg = PhaseBiasConfig { coefficients: Some(a_true), ..Default::default() };
+        let cfg = PhaseBiasConfig {
+            coefficients: Some(a_true),
+            ..Default::default()
+        };
         let before = closure_rms(&stack, 3).unwrap().0;
-        assert!(before > 1e-3, "el stack sintético debe tener cierre no nulo");
+        assert!(
+            before > 1e-3,
+            "el stack sintético debe tener cierre no nulo"
+        );
 
         let rep = correct_phase_bias(&mut stack, &cfg).unwrap();
         assert!(
@@ -1341,7 +1376,10 @@ mod tests {
         let bias: Vec<f64> = (0..n - 1).map(|i| 0.03 * ((i % 4) as f64 + 1.0)).collect();
         let def: Vec<f64> = (0..n).map(|e| 0.02 * e as f64).collect();
         let stack = synth(n, 3, &def, &bias, &a_true, 2, 3);
-        let cfg = PhaseBiasConfig { coefficients: Some(a_true), ..Default::default() };
+        let cfg = PhaseBiasConfig {
+            coefficients: Some(a_true),
+            ..Default::default()
+        };
         let d = estimate_bias_terms(&stack, &cfg).unwrap();
         assert_eq!(d.dim(), (n - 1, 2, 3));
         for slot in 0..n - 1 {
@@ -1373,7 +1411,10 @@ mod tests {
             outlier_sigma: None,
             ..Default::default()
         };
-        let robust = PhaseBiasConfig { outlier_sigma: Some(2.0), ..plain.clone() };
+        let robust = PhaseBiasConfig {
+            outlier_sigma: Some(2.0),
+            ..plain.clone()
+        };
         let (dp, dr) = (
             estimate_bias_terms(&stack, &plain).unwrap(),
             estimate_bias_terms(&stack, &robust).unwrap(),
@@ -1394,7 +1435,11 @@ mod tests {
         let bias: Vec<f64> = (0..n - 1).map(|i| 0.03 * ((i % 4) as f64 + 1.0)).collect();
         let def: Vec<f64> = (0..n).map(|e| 0.02 * e as f64).collect();
         let mut stack = synth(n, 3, &def, &bias, &a_true, 1, 1);
-        let bad = stack.pairs.iter().position(|p| p.reference == 7 && p.secondary == 10).unwrap();
+        let bad = stack
+            .pairs
+            .iter()
+            .position(|p| p.reference == 7 && p.secondary == 10)
+            .unwrap();
         stack.data[[bad, 0, 0]] *= Complex32::from_polar(1.0, 2.0);
 
         let plain = PhaseBiasConfig {
@@ -1402,16 +1447,27 @@ mod tests {
             outlier_sigma: None,
             ..Default::default()
         };
-        let robust = PhaseBiasConfig { outlier_sigma: Some(2.0), ..plain.clone() };
+        let robust = PhaseBiasConfig {
+            outlier_sigma: Some(2.0),
+            ..plain.clone()
+        };
         let err = |d: &Array3<f32>| -> f64 {
-            (0..n - 1).map(|s| (d[[s, 0, 0]] as f64 - bias[s]).abs()).fold(0.0, f64::max)
+            (0..n - 1)
+                .map(|s| (d[[s, 0, 0]] as f64 - bias[s]).abs())
+                .fold(0.0, f64::max)
         };
         let (ep, er) = (
             err(&estimate_bias_terms(&stack, &plain).unwrap()),
             err(&estimate_bias_terms(&stack, &robust).unwrap()),
         );
-        assert!(ep > 0.1, "mínimos cuadrados puros deberían contaminarse: {ep}");
-        assert!(er < 1e-4, "el enmascarado robusto debería recuperar δ: {er}");
+        assert!(
+            ep > 0.1,
+            "mínimos cuadrados puros deberían contaminarse: {ep}"
+        );
+        assert!(
+            er < 1e-4,
+            "el enmascarado robusto debería recuperar δ: {er}"
+        );
 
         // Misma ruta en correct_phase_bias: el píxel corregido debe quedar con
         // cierre ~0 en todos los loops salvo el corrompido.
@@ -1421,7 +1477,10 @@ mod tests {
         for ob in &topo.obs {
             let v = closure_at(ob, |k| s.data[[k, 0, 0]]).unwrap();
             if ob.long_layer == bad {
-                assert!(v.abs() > 1.0, "el cierre corrompido debe quedar visible: {v}");
+                assert!(
+                    v.abs() > 1.0,
+                    "el cierre corrompido debe quedar visible: {v}"
+                );
             } else {
                 assert!(v.abs() < 1e-3, "cierre residual {v} en span {}", ob.span);
             }
@@ -1449,7 +1508,10 @@ mod tests {
                 sum_sq += (*v as f64).powi(2) * c as f64;
                 total += c as usize;
             }
-            assert!((*v as f64 - global).abs() < 1e-5, "stack uniforme: {v} vs {global}");
+            assert!(
+                (*v as f64 - global).abs() < 1e-5,
+                "stack uniforme: {v} vs {global}"
+            );
         }
         assert_eq!(total, n_global, "mismo nº de observaciones que el global");
         // Tolerancia de f32: el mapa redondea cada RMS a f32 antes de agregar.
@@ -1509,7 +1571,10 @@ mod tests {
         for k in 0..stack.pairs.len() {
             stack.data[[k, 0, 0]] = Complex32::new(0.0, 0.0);
         }
-        let cfg = PhaseBiasConfig { coefficients: Some(a_true), ..Default::default() };
+        let cfg = PhaseBiasConfig {
+            coefficients: Some(a_true),
+            ..Default::default()
+        };
         let rep = correct_phase_bias(&mut stack, &cfg).unwrap();
         assert_eq!(rep.pixels_skipped, 1);
         assert_eq!(rep.pixels_corrected, 3);
@@ -1529,7 +1594,10 @@ mod tests {
         let mut stack = synth(n, 3, &def, &bias, &a_true, 2, 2);
         stack.data.mapv_inplace(|z| z * 7.5); // amplitud arbitraria ≠ 1
 
-        let cfg = PhaseBiasConfig { coefficients: Some(a_true), ..Default::default() };
+        let cfg = PhaseBiasConfig {
+            coefficients: Some(a_true),
+            ..Default::default()
+        };
         correct_phase_bias(&mut stack, &cfg).unwrap();
         for z in stack.data.iter() {
             assert!((z.norm() - 7.5).abs() < 1e-3, "módulo cambió: {}", z.norm());
@@ -1594,7 +1662,10 @@ mod tests {
         let def: Vec<f64> = (0..n).map(|e| 0.05 * e as f64).collect();
         let stack = synth(n, 3, &def, &bias, &a_true, 2, 2);
 
-        let cfg = PhaseBiasConfig { coefficients: Some(a_true), ..Default::default() };
+        let cfg = PhaseBiasConfig {
+            coefficients: Some(a_true),
+            ..Default::default()
+        };
         let cum = cumulative_bias(&stack, &cfg).unwrap();
         assert_eq!(cum.shape(), &[n, 2, 2]);
         assert_eq!(cum[[0, 0, 0]], 0.0);

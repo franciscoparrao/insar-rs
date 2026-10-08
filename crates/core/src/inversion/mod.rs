@@ -75,7 +75,11 @@ pub struct IrlsConfig {
 
 impl Default for IrlsConfig {
     fn default() -> Self {
-        Self { max_iterations: 20, tolerance_m: 1e-6, epsilon_m: 1e-4 }
+        Self {
+            max_iterations: 20,
+            tolerance_m: 1e-6,
+            epsilon_m: 1e-4,
+        }
     }
 }
 
@@ -374,8 +378,7 @@ pub fn invert_sbas_ext(
                 let valid_idx: Vec<usize> = (0..n_pairs)
                     .filter(|&k| mask[k / 64] & (1u64 << (k % 64)) != 0)
                     .collect();
-                let solver =
-                    reduced_pinv(&valid_idx, &stack.pairs, n_epochs, dem_col.as_deref());
+                let solver = reduced_pinv(&valid_idx, &stack.pairs, n_epochs, dem_col.as_deref());
                 (mask, solver)
             })
             .collect();
@@ -603,8 +606,7 @@ fn dem_error_column(
             config.slant_range_m
         )));
     }
-    if !(incidence_deg.is_finite() && (0.0..90.0).contains(&incidence_deg) && incidence_deg > 0.0)
-    {
+    if !(incidence_deg.is_finite() && (0.0..90.0).contains(&incidence_deg) && incidence_deg > 0.0) {
         return Err(InsarError::Metadata(format!(
             "incidence_deg inválido para error de DEM: {incidence_deg}"
         )));
@@ -661,8 +663,7 @@ fn reduced_pinv(
     if !network::is_connected(&reduced, n_epochs) {
         return None;
     }
-    let reduced_dem: Option<Vec<f64>> =
-        dem_col.map(|g| valid_idx.iter().map(|&k| g[k]).collect());
+    let reduced_dem: Option<Vec<f64>> = dem_col.map(|g| valid_idx.iter().map(|&k| g[k]).collect());
     let a = build_design_ext(&reduced, n_epochs, reduced_dem.as_deref()).ok()?;
     let m = reduced.len();
     let svd = a.svd(true, true);
@@ -749,7 +750,11 @@ pub fn select_reference_pixel(
                 (None, x) | (x, None) => x,
                 (Some(x), Some(y)) => {
                     // Mayor (n_válidos, media) gana; empate → menor (fila, col).
-                    if y.0 > x.0 || (y.0 == x.0 && y.1 < x.1) { Some(y) } else { Some(x) }
+                    if y.0 > x.0 || (y.0 == x.0 && y.1 < x.1) {
+                        Some(y)
+                    } else {
+                        Some(x)
+                    }
                 }
             },
         )
@@ -777,8 +782,7 @@ pub fn estimate_velocity(series: &DisplacementSeries) -> Result<VelocityMap> {
     let denom: f64 = t.iter().map(|&ti| (ti - t_mean).powi(2)).sum();
     if denom <= 0.0 {
         return Err(InsarError::Inversion(
-            "todas las épocas tienen la misma fecha; el ajuste lineal es indeterminado"
-                .to_string(),
+            "todas las épocas tienen la misma fecha; el ajuste lineal es indeterminado".to_string(),
         ));
     }
 
@@ -786,25 +790,31 @@ pub fn estimate_velocity(series: &DisplacementSeries) -> Result<VelocityMap> {
     let data = series.data.view();
 
     let mut row_views: Vec<_> = out.axis_iter_mut(Axis(0)).collect();
-    row_views.par_iter_mut().enumerate().for_each(|(r, out_row)| {
-        for c in 0..n_cols {
-            let mut sxy = 0.0_f64;
-            let mut valid = true;
-            for e in 0..n_epochs {
-                let d = data[[e, r, c]];
-                if !d.is_finite() {
-                    valid = false;
-                    break;
+    row_views
+        .par_iter_mut()
+        .enumerate()
+        .for_each(|(r, out_row)| {
+            for c in 0..n_cols {
+                let mut sxy = 0.0_f64;
+                let mut valid = true;
+                for e in 0..n_epochs {
+                    let d = data[[e, r, c]];
+                    if !d.is_finite() {
+                        valid = false;
+                        break;
+                    }
+                    sxy += (t[e] - t_mean) * d as f64;
                 }
-                sxy += (t[e] - t_mean) * d as f64;
+                if valid {
+                    out_row[c] = (sxy / denom) as f32;
+                }
             }
-            if valid {
-                out_row[c] = (sxy / denom) as f32;
-            }
-        }
-    });
+        });
 
-    Ok(VelocityMap { data: out, meta: series.meta.clone() })
+    Ok(VelocityMap {
+        data: out,
+        meta: series.meta.clone(),
+    })
 }
 
 /// Incertidumbre (error estándar) de la velocidad LOS por píxel (m/año), del
@@ -834,34 +844,37 @@ pub fn estimate_velocity_uncertainty(series: &DisplacementSeries) -> Result<Arra
     let mut out = Array2::<f32>::from_elem((n_rows, n_cols), f32::NAN);
     let data = series.data.view();
     let mut row_views: Vec<_> = out.axis_iter_mut(Axis(0)).collect();
-    row_views.par_iter_mut().enumerate().for_each(|(r, out_row)| {
-        for c in 0..n_cols {
-            // d̄ y la pendiente v = Σ(t−t̄)d / Σ(t−t̄)²; aborta si hay NaN.
-            let (mut d_mean, mut sxy, mut valid) = (0.0_f64, 0.0_f64, true);
-            for e in 0..n_epochs {
-                let d = data[[e, r, c]];
-                if !d.is_finite() {
-                    valid = false;
-                    break;
+    row_views
+        .par_iter_mut()
+        .enumerate()
+        .for_each(|(r, out_row)| {
+            for c in 0..n_cols {
+                // d̄ y la pendiente v = Σ(t−t̄)d / Σ(t−t̄)²; aborta si hay NaN.
+                let (mut d_mean, mut sxy, mut valid) = (0.0_f64, 0.0_f64, true);
+                for e in 0..n_epochs {
+                    let d = data[[e, r, c]];
+                    if !d.is_finite() {
+                        valid = false;
+                        break;
+                    }
+                    d_mean += d as f64;
+                    sxy += (t[e] - t_mean) * d as f64;
                 }
-                d_mean += d as f64;
-                sxy += (t[e] - t_mean) * d as f64;
+                if !valid {
+                    continue;
+                }
+                d_mean /= n_epochs as f64;
+                let v = sxy / sxx;
+                // SSR = Σ (d − d̄ − v·(t − t̄))².
+                let mut ssr = 0.0_f64;
+                for e in 0..n_epochs {
+                    let resid = data[[e, r, c]] as f64 - d_mean - v * (t[e] - t_mean);
+                    ssr += resid * resid;
+                }
+                let var_v = (ssr / (n_epochs - 2) as f64) / sxx;
+                out_row[c] = var_v.sqrt() as f32;
             }
-            if !valid {
-                continue;
-            }
-            d_mean /= n_epochs as f64;
-            let v = sxy / sxx;
-            // SSR = Σ (d − d̄ − v·(t − t̄))².
-            let mut ssr = 0.0_f64;
-            for e in 0..n_epochs {
-                let resid = data[[e, r, c]] as f64 - d_mean - v * (t[e] - t_mean);
-                ssr += resid * resid;
-            }
-            let var_v = (ssr / (n_epochs - 2) as f64) / sxx;
-            out_row[c] = var_v.sqrt() as f32;
-        }
-    });
+        });
 
     Ok(out)
 }
@@ -923,56 +936,59 @@ pub fn estimate_velocity_bootstrap(
     let mut out = Array2::<f32>::from_elem((n_rows, n_cols), f32::NAN);
     let data = series.data.view();
     let mut row_views: Vec<_> = out.axis_iter_mut(Axis(0)).collect();
-    row_views.par_iter_mut().enumerate().for_each(|(r, out_row)| {
-        let mut d_px = vec![0.0_f64; n_epochs];
-        let mut slopes: Vec<f64> = Vec::with_capacity(n_resamples);
-        for c in 0..n_cols {
-            // Política MVP: cualquier NaN en la serie del píxel → NaN.
-            let mut valid = true;
-            for e in 0..n_epochs {
-                let d = data[[e, r, c]];
-                if !d.is_finite() {
-                    valid = false;
-                    break;
+    row_views
+        .par_iter_mut()
+        .enumerate()
+        .for_each(|(r, out_row)| {
+            let mut d_px = vec![0.0_f64; n_epochs];
+            let mut slopes: Vec<f64> = Vec::with_capacity(n_resamples);
+            for c in 0..n_cols {
+                // Política MVP: cualquier NaN en la serie del píxel → NaN.
+                let mut valid = true;
+                for e in 0..n_epochs {
+                    let d = data[[e, r, c]];
+                    if !d.is_finite() {
+                        valid = false;
+                        break;
+                    }
+                    d_px[e] = d as f64;
                 }
-                d_px[e] = d as f64;
-            }
-            if !valid {
-                continue;
-            }
+                if !valid {
+                    continue;
+                }
 
-            // Semilla por píxel independiente del orden de los threads.
-            let mut rng = seed
-                ^ (r as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
-                ^ (c as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+                // Semilla por píxel independiente del orden de los threads.
+                let mut rng = seed
+                    ^ (r as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                    ^ (c as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9);
 
-            slopes.clear();
-            for _ in 0..n_resamples {
-                // Remuestreo con reemplazo de las parejas (t_e, d_e).
-                let (mut st, mut sd, mut stt, mut std_) = (0.0_f64, 0.0, 0.0, 0.0);
-                for _ in 0..n_epochs {
-                    let e = (splitmix64(&mut rng) % n_epochs as u64) as usize;
-                    st += t[e];
-                    sd += d_px[e];
-                    stt += t[e] * t[e];
-                    std_ += t[e] * d_px[e];
+                slopes.clear();
+                for _ in 0..n_resamples {
+                    // Remuestreo con reemplazo de las parejas (t_e, d_e).
+                    let (mut st, mut sd, mut stt, mut std_) = (0.0_f64, 0.0, 0.0, 0.0);
+                    for _ in 0..n_epochs {
+                        let e = (splitmix64(&mut rng) % n_epochs as u64) as usize;
+                        st += t[e];
+                        sd += d_px[e];
+                        stt += t[e] * t[e];
+                        std_ += t[e] * d_px[e];
+                    }
+                    let n = n_epochs as f64;
+                    let sxx = stt - st * st / n;
+                    if sxx <= f64::EPSILON * stt.max(1.0) {
+                        continue; // remuestreo degenerado (misma fecha repetida)
+                    }
+                    slopes.push((std_ - st * sd / n) / sxx);
                 }
-                let n = n_epochs as f64;
-                let sxx = stt - st * st / n;
-                if sxx <= f64::EPSILON * stt.max(1.0) {
-                    continue; // remuestreo degenerado (misma fecha repetida)
+                if slopes.len() < 2 {
+                    continue;
                 }
-                slopes.push((std_ - st * sd / n) / sxx);
+                let m = slopes.iter().sum::<f64>() / slopes.len() as f64;
+                let var =
+                    slopes.iter().map(|v| (v - m).powi(2)).sum::<f64>() / (slopes.len() - 1) as f64;
+                out_row[c] = var.sqrt() as f32;
             }
-            if slopes.len() < 2 {
-                continue;
-            }
-            let m = slopes.iter().sum::<f64>() / slopes.len() as f64;
-            let var = slopes.iter().map(|v| (v - m).powi(2)).sum::<f64>()
-                / (slopes.len() - 1) as f64;
-            out_row[c] = var.sqrt() as f32;
-        }
-    });
+        });
 
     Ok(out)
 }
@@ -996,7 +1012,11 @@ pub struct TemporalModel {
 
 impl Default for TemporalModel {
     fn default() -> Self {
-        Self { polynomial_order: 1, periods_yr: Vec::new(), steps: Vec::new() }
+        Self {
+            polynomial_order: 1,
+            periods_yr: Vec::new(),
+            steps: Vec::new(),
+        }
     }
 }
 
@@ -1050,7 +1070,11 @@ pub fn fit_temporal_model(
             "polynomial_order debe ser ≥ 1 (1 = offset + velocidad)".into(),
         ));
     }
-    if let Some(p) = model.periods_yr.iter().find(|p| !(p.is_finite() && **p > 0.0)) {
+    if let Some(p) = model
+        .periods_yr
+        .iter()
+        .find(|p| !(p.is_finite() && **p > 0.0))
+    {
         return Err(InsarError::Metadata(format!("periodo inválido: {p} años")));
     }
 
@@ -1099,7 +1123,11 @@ pub fn fit_temporal_model(
             let jj = j - 1 - model.polynomial_order;
             let period = model.periods_yr[jj / 2];
             let arg = 2.0 * PI * te / period;
-            if jj.is_multiple_of(2) { arg.cos() } else { arg.sin() }
+            if jj.is_multiple_of(2) {
+                arg.cos()
+            } else {
+                arg.sin()
+            }
         } else {
             let s = j - 1 - model.polynomial_order - 2 * model.periods_yr.len();
             if te >= step_t[s] { 1.0 } else { 0.0 }
@@ -1173,7 +1201,10 @@ pub fn fit_temporal_model(
     drop(std_rows);
 
     Ok(TemporalFit {
-        velocity: VelocityMap { data: vel, meta: series.meta.clone() },
+        velocity: VelocityMap {
+            data: vel,
+            meta: series.meta.clone(),
+        },
         velocity_std: vel_std,
         coefficients: coeffs,
         names,
@@ -1228,26 +1259,29 @@ pub fn temporal_coherence(
 
     let mut out = Array2::<f32>::from_elem((n_rows, n_cols), f32::NAN);
     let mut row_views: Vec<_> = out.axis_iter_mut(Axis(0)).collect();
-    row_views.par_iter_mut().enumerate().for_each(|(r, out_row)| {
-        for c in 0..n_cols {
-            let (mut re, mut im, mut m) = (0.0_f64, 0.0_f64, 0usize);
-            for (k, p) in pairs.iter().enumerate() {
-                let obs = phases[[k, r, c]];
-                let d_sec = disp[[p.secondary, r, c]];
-                let d_ref = disp[[p.reference, r, c]];
-                if obs.is_finite() && d_sec.is_finite() && d_ref.is_finite() {
-                    let model = displacement_to_phase((d_sec - d_ref) as f64, wavelength_m);
-                    let dphi = obs as f64 - model;
-                    re += dphi.cos();
-                    im += dphi.sin();
-                    m += 1;
+    row_views
+        .par_iter_mut()
+        .enumerate()
+        .for_each(|(r, out_row)| {
+            for c in 0..n_cols {
+                let (mut re, mut im, mut m) = (0.0_f64, 0.0_f64, 0usize);
+                for (k, p) in pairs.iter().enumerate() {
+                    let obs = phases[[k, r, c]];
+                    let d_sec = disp[[p.secondary, r, c]];
+                    let d_ref = disp[[p.reference, r, c]];
+                    if obs.is_finite() && d_sec.is_finite() && d_ref.is_finite() {
+                        let model = displacement_to_phase((d_sec - d_ref) as f64, wavelength_m);
+                        let dphi = obs as f64 - model;
+                        re += dphi.cos();
+                        im += dphi.sin();
+                        m += 1;
+                    }
+                }
+                if m > 0 {
+                    out_row[c] = ((re * re + im * im).sqrt() / m as f64) as f32;
                 }
             }
-            if m > 0 {
-                out_row[c] = ((re * re + im * im).sqrt() / m as f64) as f32;
-            }
-        }
-    });
+        });
 
     Ok(out)
 }
@@ -1259,8 +1293,8 @@ mod tests {
     #![allow(clippy::needless_range_loop)]
     use super::*;
     use crate::types::{
-        DisplacementSeries, Epoch, IfgPair, PsCandidate, StackMeta, UnwrappedStack,
-        SENTINEL1_WAVELENGTH_M,
+        DisplacementSeries, Epoch, IfgPair, PsCandidate, SENTINEL1_WAVELENGTH_M, StackMeta,
+        UnwrappedStack,
     };
     use ndarray::Array3;
     use surtgis_core::GeoTransform;
@@ -1295,7 +1329,11 @@ mod tests {
     }
 
     fn pair(i: usize, j: usize) -> IfgPair {
-        IfgPair { reference: i, secondary: j, perp_baseline_m: 0.0 }
+        IfgPair {
+            reference: i,
+            secondary: j,
+            perp_baseline_m: 0.0,
+        }
     }
 
     /// Red de 4 épocas: pares consecutivos + saltos de 2.
@@ -1307,7 +1345,10 @@ mod tests {
 
     /// Desplazamientos verdaderos por época, relativos a la primera.
     fn true_displacements(epochs: &[Epoch]) -> Vec<f64> {
-        epochs.iter().map(|e| V_TRUE * e.years_since(&epochs[0])).collect()
+        epochs
+            .iter()
+            .map(|e| V_TRUE * e.years_since(&epochs[0]))
+            .collect()
     }
 
     /// Stack sintético exacto: φ_par = −4π/λ · (d_sec − d_ref), igual en
@@ -1322,7 +1363,12 @@ mod tests {
             let phi = (-4.0 * PI / SENTINEL1_WAVELENGTH_M * dd) as f32;
             data.index_axis_mut(ndarray::Axis(0), k).fill(phi);
         }
-        UnwrappedStack { data, epochs, pairs, meta: meta() }
+        UnwrappedStack {
+            data,
+            epochs,
+            pairs,
+            meta: meta(),
+        }
     }
 
     // ---------- invert_sbas ----------
@@ -1361,7 +1407,11 @@ mod tests {
         let series = invert_sbas(&stack, None).unwrap();
         for e in 0..4 {
             let got = series.data[[e, 0, 0]] as f64;
-            assert!((got - d[e]).abs() < 1e-5, "par faltante, época {e}: {got} vs {}", d[e]);
+            assert!(
+                (got - d[e]).abs() < 1e-5,
+                "par faltante, época {e}: {got} vs {}",
+                d[e]
+            );
             // Píxel (0,1) intacto: camino rápido, también recupera.
             assert!((series.data[[e, 0, 1]] as f64 - d[e]).abs() < 1e-5);
         }
@@ -1404,7 +1454,11 @@ mod tests {
     #[test]
     fn ps_some_invierte_solo_candidatos() {
         let stack = synthetic_stack(2, 3);
-        let cands = [PsCandidate { row: 1, col: 2, amp_dispersion: 0.1 }];
+        let cands = [PsCandidate {
+            row: 1,
+            col: 2,
+            amp_dispersion: 0.1,
+        }];
         let series = invert_sbas(&stack, Some(&cands)).unwrap();
 
         let d = true_displacements(&stack.epochs);
@@ -1425,7 +1479,11 @@ mod tests {
     #[test]
     fn ps_fuera_de_grilla_es_error() {
         let stack = synthetic_stack(2, 3);
-        let cands = [PsCandidate { row: 5, col: 0, amp_dispersion: 0.1 }];
+        let cands = [PsCandidate {
+            row: 5,
+            col: 0,
+            amp_dispersion: 0.1,
+        }];
         let err = invert_sbas(&stack, Some(&cands)).unwrap_err();
         assert!(matches!(err, InsarError::DimensionMismatch(_)));
     }
@@ -1508,7 +1566,10 @@ mod tests {
         let e_ols = max_err(&ols.data);
         let e_wls = max_err(&wls.series.data);
         assert!(e_ols > 1e-4, "el par corrupto debía sesgar OLS: {e_ols}");
-        assert!(e_wls < e_ols / 5.0, "WLS no mejoró: wls={e_wls}, ols={e_ols}");
+        assert!(
+            e_wls < e_ols / 5.0,
+            "WLS no mejoró: wls={e_wls}, ols={e_ols}"
+        );
     }
 
     #[test]
@@ -1540,7 +1601,11 @@ mod tests {
         for e in 0..4 {
             for c in 0..2 {
                 let got = sol.series.data[[e, 0, c]] as f64;
-                assert!((got - d[e]).abs() < 1e-5, "época {e}, col {c}: {got} vs {}", d[e]);
+                assert!(
+                    (got - d[e]).abs() < 1e-5,
+                    "época {e}, col {c}: {got} vs {}",
+                    d[e]
+                );
             }
         }
     }
@@ -1577,7 +1642,9 @@ mod tests {
         let d = true_displacements(&stack.epochs);
 
         let cfg = SbasSolverConfig {
-            dem_error: Some(DemErrorConfig { slant_range_m: SLANT_RANGE }),
+            dem_error: Some(DemErrorConfig {
+                slant_range_m: SLANT_RANGE,
+            }),
             ..Default::default()
         };
         let sol = invert_sbas_ext(&stack, None, None, &cfg).unwrap();
@@ -1599,7 +1666,10 @@ mod tests {
         let bias = (0..4)
             .map(|e| (ols.data[[e, 0, 0]] as f64 - d[e]).abs())
             .fold(0.0_f64, f64::max);
-        assert!(bias > 5e-4, "se esperaba sesgo sin corrección de DEM: {bias}");
+        assert!(
+            bias > 5e-4,
+            "se esperaba sesgo sin corrección de DEM: {bias}"
+        );
     }
 
     #[test]
@@ -1609,12 +1679,18 @@ mod tests {
         let coh = Array3::from_elem(stack.data.dim(), 0.85_f32);
         let cfg = SbasSolverConfig {
             weighting: WeightScheme::InversePhaseVariance,
-            dem_error: Some(DemErrorConfig { slant_range_m: SLANT_RANGE }),
+            dem_error: Some(DemErrorConfig {
+                slant_range_m: SLANT_RANGE,
+            }),
             robust: None,
         };
         let sol = invert_sbas_ext(&stack, None, Some(&coh), &cfg).unwrap();
         let dem = sol.dem_error_m.expect("mapa Δz presente");
-        assert!((dem[[0, 0]] as f64 - dz).abs() < 0.05, "Δz = {}", dem[[0, 0]]);
+        assert!(
+            (dem[[0, 0]] as f64 - dz).abs() < 0.05,
+            "Δz = {}",
+            dem[[0, 0]]
+        );
     }
 
     #[test]
@@ -1622,7 +1698,9 @@ mod tests {
         // pairs_4ep tiene B⊥ = 0 → sin información de Δz → error claro.
         let stack = synthetic_stack(1, 1);
         let cfg = SbasSolverConfig {
-            dem_error: Some(DemErrorConfig { slant_range_m: SLANT_RANGE }),
+            dem_error: Some(DemErrorConfig {
+                slant_range_m: SLANT_RANGE,
+            }),
             ..Default::default()
         };
         assert!(matches!(
@@ -1656,17 +1734,28 @@ mod tests {
             let dd = d[p.secondary] - d[p.reference];
             data[[k, 0, 0]] = (-4.0 * PI / SENTINEL1_WAVELENGTH_M * dd) as f32;
         }
-        let stack = UnwrappedStack { data, epochs, pairs, meta: meta() };
+        let stack = UnwrappedStack {
+            data,
+            epochs,
+            pairs,
+            meta: meta(),
+        };
 
         let coh = Array3::from_elem(stack.data.dim(), 0.85_f32);
         let cfg = SbasSolverConfig {
             weighting: WeightScheme::InversePhaseVariance,
-            dem_error: Some(DemErrorConfig { slant_range_m: SLANT_RANGE }),
+            dem_error: Some(DemErrorConfig {
+                slant_range_m: SLANT_RANGE,
+            }),
             robust: None,
         };
         let sol = invert_sbas_ext(&stack, None, Some(&coh), &cfg).unwrap();
         let dem = sol.dem_error_m.expect("mapa Δz presente");
-        assert!(dem[[0, 0]].is_nan(), "Δz debería quedar NaN por colinealidad, no {}", dem[[0, 0]]);
+        assert!(
+            dem[[0, 0]].is_nan(),
+            "Δz debería quedar NaN por colinealidad, no {}",
+            dem[[0, 0]]
+        );
     }
 
     // ---------- invert_sbas_ext: inversión robusta L1 (IRLS) ----------
@@ -1691,7 +1780,12 @@ mod tests {
             let phi = (-4.0 * PI / SENTINEL1_WAVELENGTH_M * dd) as f32;
             data.index_axis_mut(ndarray::Axis(0), k).fill(phi);
         }
-        UnwrappedStack { data, epochs, pairs, meta: meta() }
+        UnwrappedStack {
+            data,
+            epochs,
+            pairs,
+            meta: meta(),
+        }
     }
 
     #[test]
@@ -1719,7 +1813,10 @@ mod tests {
         let e_ols = max_err(&ols.data, 0);
         let e_l1 = max_err(&l1.series.data, 0);
         assert!(e_ols > 1e-4, "el outlier debía sesgar L2: {e_ols}");
-        assert!(e_l1 < e_ols / 10.0, "L1 no aisló el outlier: l1={e_l1}, l2={e_ols}");
+        assert!(
+            e_l1 < e_ols / 10.0,
+            "L1 no aisló el outlier: l1={e_l1}, l2={e_ols}"
+        );
         // El píxel limpio queda igual de bien que con L2.
         assert!(max_err(&l1.series.data, 1) < 1e-5);
     }
@@ -1748,12 +1845,18 @@ mod tests {
         let coh = Array3::from_elem(stack.data.dim(), 0.9_f32);
         let cfg = SbasSolverConfig {
             weighting: WeightScheme::InversePhaseVariance,
-            dem_error: Some(DemErrorConfig { slant_range_m: SLANT_RANGE }),
+            dem_error: Some(DemErrorConfig {
+                slant_range_m: SLANT_RANGE,
+            }),
             robust: Some(IrlsConfig::default()),
         };
         let sol = invert_sbas_ext(&stack, None, Some(&coh), &cfg).unwrap();
         let dem = sol.dem_error_m.expect("mapa Δz presente");
-        assert!((dem[[0, 0]] as f64 - dz).abs() < 0.05, "Δz = {}", dem[[0, 0]]);
+        assert!(
+            (dem[[0, 0]] as f64 - dz).abs() < 0.05,
+            "Δz = {}",
+            dem[[0, 0]]
+        );
     }
 
     // ---------- estimate_velocity_bootstrap ----------
@@ -1766,7 +1869,9 @@ mod tests {
         let epochs = epochs_12d(n);
         let mut seed = 7_u64;
         let mut lcg = move || {
-            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             ((seed >> 40) as f64 / (1u64 << 24) as f64) - 0.5
         };
         let mut data = Array3::<f32>::zeros((n, 2, 2));
@@ -1778,7 +1883,11 @@ mod tests {
                 }
             }
         }
-        let series = DisplacementSeries { data, epochs, meta: meta() };
+        let series = DisplacementSeries {
+            data,
+            epochs,
+            meta: meta(),
+        };
 
         let b1 = estimate_velocity_bootstrap(&series, 200, 42).unwrap();
         let b2 = estimate_velocity_bootstrap(&series, 200, 42).unwrap();
@@ -1825,7 +1934,11 @@ mod tests {
             }
             d as f32
         });
-        DisplacementSeries { data, epochs, meta: meta() }
+        DisplacementSeries {
+            data,
+            epochs,
+            meta: meta(),
+        }
     }
 
     #[test]
@@ -1837,12 +1950,21 @@ mod tests {
         let plain = estimate_velocity(&series).unwrap();
         let bias_plain = (plain.data[[0, 0]] as f64 - V_TRUE).abs();
 
-        let model = TemporalModel { periods_yr: vec![1.0], ..Default::default() };
+        let model = TemporalModel {
+            periods_yr: vec![1.0],
+            ..Default::default()
+        };
         let fit = fit_temporal_model(&series, &model).unwrap();
         let bias_model = (fit.velocity.data[[0, 0]] as f64 - V_TRUE).abs();
 
-        assert!(bias_plain > 1e-3, "el fit lineal debía quedar sesgado: {bias_plain}");
-        assert!(bias_model < 1e-5, "el modelo estacional no desbiasó: {bias_model}");
+        assert!(
+            bias_plain > 1e-3,
+            "el fit lineal debía quedar sesgado: {bias_plain}"
+        );
+        assert!(
+            bias_model < 1e-5,
+            "el modelo estacional no desbiasó: {bias_model}"
+        );
         assert_eq!(
             fit.names,
             vec!["offset", "velocity", "cos_1yr", "sin_1yr"],
@@ -1858,7 +1980,10 @@ mod tests {
         // Salto cosísmico de 5 cm en la época 20 de 40.
         let series = seasonal_series(40, 0.0, Some((20, 0.05)));
         let step_epoch = series.epochs[20];
-        let model = TemporalModel { steps: vec![step_epoch], ..Default::default() };
+        let model = TemporalModel {
+            steps: vec![step_epoch],
+            ..Default::default()
+        };
         let fit = fit_temporal_model(&series, &model).unwrap();
 
         assert!((fit.velocity.data[[0, 0]] as f64 - V_TRUE).abs() < 1e-5);
@@ -1872,14 +1997,23 @@ mod tests {
     fn modelo_invalido_es_error() {
         let series = seasonal_series(10, 0.0, None);
         // Orden 0.
-        let m = TemporalModel { polynomial_order: 0, ..Default::default() };
+        let m = TemporalModel {
+            polynomial_order: 0,
+            ..Default::default()
+        };
         assert!(fit_temporal_model(&series, &m).is_err());
         // Periodo inválido.
-        let m = TemporalModel { periods_yr: vec![0.0], ..Default::default() };
+        let m = TemporalModel {
+            periods_yr: vec![0.0],
+            ..Default::default()
+        };
         assert!(fit_temporal_model(&series, &m).is_err());
         // Salto fuera del rango (antes de la primera época).
         let early = Epoch("2020-01-01".parse().unwrap());
-        let m = TemporalModel { steps: vec![early], ..Default::default() };
+        let m = TemporalModel {
+            steps: vec![early],
+            ..Default::default()
+        };
         assert!(fit_temporal_model(&series, &m).is_err());
         // Más coeficientes que épocas.
         let m = TemporalModel {
@@ -2041,10 +2175,16 @@ mod tests {
         // Añade un offset constante distinto a cada par (todos los píxeles).
         for k in 0..stack.pairs.len() {
             let off = 3.0 + k as f32;
-            stack.data.index_axis_mut(ndarray::Axis(0), k).mapv_inplace(|v| v + off);
+            stack
+                .data
+                .index_axis_mut(ndarray::Axis(0), k)
+                .mapv_inplace(|v| v + off);
         }
         let n_lost = reference_to_pixel(&mut stack, 0, 0).unwrap();
-        assert_eq!(n_lost, 0, "el píxel de referencia es finito en todos los pares");
+        assert_eq!(
+            n_lost, 0,
+            "el píxel de referencia es finito en todos los pares"
+        );
         // El píxel de referencia queda en 0 para todos los pares.
         for k in 0..stack.pairs.len() {
             assert!(stack.data[[k, 0, 0]].abs() < 1e-6);
@@ -2068,7 +2208,13 @@ mod tests {
         let n_lost = reference_to_pixel(&mut stack, 0, 0).unwrap();
         assert_eq!(n_lost, 1);
         // Ese par queda enteramente NaN (todos los píxeles, no solo (0,0)).
-        assert!(stack.data.index_axis(ndarray::Axis(0), 0).iter().all(|v| v.is_nan()));
+        assert!(
+            stack
+                .data
+                .index_axis(ndarray::Axis(0), 0)
+                .iter()
+                .all(|v| v.is_nan())
+        );
         // El resto de los pares sí quedó referenciado (no NaN).
         for k in 1..stack.pairs.len() {
             assert!(stack.data[[k, 0, 0]].abs() < 1e-6);
@@ -2109,7 +2255,11 @@ mod tests {
         stack.data[[0, 0, 0]] += 2.0; // +2 rad en el par 0
         let gamma = temporal_coherence(&stack, &series).unwrap();
         assert!(gamma[[0, 0]] < 0.95, "γ corrupto = {}", gamma[[0, 0]]);
-        assert!((gamma[[0, 1]] - 1.0).abs() < 1e-5, "γ limpio = {}", gamma[[0, 1]]);
+        assert!(
+            (gamma[[0, 1]] - 1.0).abs() < 1e-5,
+            "γ limpio = {}",
+            gamma[[0, 1]]
+        );
     }
 
     #[test]

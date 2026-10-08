@@ -248,9 +248,7 @@ fn child_text<'a>(node: &'a roxmltree::Node, tag: &str) -> Option<&'a str> {
 /// Parsea el texto de un nodo hijo como u64 (error UnsupportedFormat si falta/inválido).
 fn parse_child_u64(node: &roxmltree::Node, tag: &str, path: &Path) -> Result<u64> {
     child_text(node, tag)
-        .ok_or_else(|| {
-            InsarError::UnsupportedFormat(format!("{}: falta {tag}", path.display()))
-        })?
+        .ok_or_else(|| InsarError::UnsupportedFormat(format!("{}: falta {tag}", path.display())))?
         .trim()
         .parse::<u64>()
         .map_err(|e| {
@@ -389,7 +387,11 @@ fn decode_raw_with<T: Copy + Default>(
     let last_byte = (rows - 1)
         .checked_mul(line_offset)
         .and_then(|v| image_offset.checked_add(v))
-        .and_then(|v| (cols - 1).checked_mul(pixel_offset).and_then(|w| v.checked_add(w)))
+        .and_then(|v| {
+            (cols - 1)
+                .checked_mul(pixel_offset)
+                .and_then(|w| v.checked_add(w))
+        })
         .and_then(|v| v.checked_add(elem));
     match last_byte {
         Some(needed) if needed <= raw.len() => {}
@@ -398,7 +400,9 @@ fn decode_raw_with<T: Copy + Default>(
                 &band.source,
                 std::io::Error::new(
                     std::io::ErrorKind::UnexpectedEof,
-                    format!("archivo más corto de lo que exigen los offsets de la banda {band_1based}"),
+                    format!(
+                        "archivo más corto de lo que exigen los offsets de la banda {band_1based}"
+                    ),
                 ),
             ));
         }
@@ -457,7 +461,9 @@ fn list_pair_dirs(dir: &Path) -> Result<Vec<(NaiveDate, NaiveDate, String, PathB
 /// Parsea exactamente `YYYYMMDD_YYYYMMDD` (8 dígitos, '_', 8 dígitos).
 fn parse_pair_name(name: &str) -> Option<(NaiveDate, NaiveDate)> {
     let (a, b) = name.split_once('_')?;
-    if a.len() != 8 || b.len() != 8 || !a.bytes().all(|c| c.is_ascii_digit())
+    if a.len() != 8
+        || b.len() != 8
+        || !a.bytes().all(|c| c.is_ascii_digit())
         || !b.bytes().all(|c| c.is_ascii_digit())
     {
         return None;
@@ -494,7 +500,11 @@ fn read_baseline(baselines_dir: &Path, pair_name: &str) -> Option<f64> {
         }
     }
 
-    if count == 0 { None } else { Some(sum / count as f64) }
+    if count == 0 {
+        None
+    } else {
+        Some(sum / count as f64)
+    }
 }
 
 /// Lee la banda de fase (2) de un `.unw` enmascarando el NoData de ISCE: los
@@ -696,12 +706,14 @@ pub fn read_isce_los(los_path: &Path) -> Result<(Array2<f32>, Array2<f32>)> {
     let mut incidence = read_raw_band(&layout, 1)?;
     let mut azimuth = read_raw_band(&layout, 2)?;
     // NoData de ISCE: (0, 0) exacto en ambas bandas.
-    ndarray::Zip::from(&mut incidence).and(&mut azimuth).for_each(|inc, az| {
-        if *inc == 0.0 && *az == 0.0 {
-            *inc = f32::NAN;
-            *az = f32::NAN;
-        }
-    });
+    ndarray::Zip::from(&mut incidence)
+        .and(&mut azimuth)
+        .for_each(|inc, az| {
+            if *inc == 0.0 && *az == 0.0 {
+                *inc = f32::NAN;
+                *az = f32::NAN;
+            }
+        });
     Ok((incidence, azimuth))
 }
 
@@ -745,7 +757,10 @@ fn epochs_pairs_baselines(
     let epochs: Vec<Epoch> = date_set.iter().map(|d| Epoch(*d)).collect();
     let date_to_idx = |d: &NaiveDate| -> usize {
         // BTreeSet ordenado → posición = índice.
-        date_set.iter().position(|x| x == d).expect("fecha presente en el set")
+        date_set
+            .iter()
+            .position(|x| x == d)
+            .expect("fecha presente en el set")
     };
 
     let mut pairs: Vec<IfgPair> = Vec::with_capacity(pair_dirs.len());
@@ -832,8 +847,8 @@ mod tests {
 
     /// Directorio temporal único por test (sin crate tempfile).
     fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir()
-            .join(format!("insar_isce_test_{}_{name}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("insar_isce_test_{}_{name}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("crear dir temporal de test");
         dir
@@ -930,7 +945,10 @@ mod tests {
         let layout = parse_vrt(&dir.join("raw.vrt")).unwrap();
         let err = read_raw_band(&layout, 2).unwrap_err();
         assert!(matches!(err, InsarError::Io { .. }), "got: {err:?}");
-        assert!(err.to_string().contains(src), "el error debe incluir el path que falló: {err}");
+        assert!(
+            err.to_string().contains(src),
+            "el error debe incluir el path que falló: {err}"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -944,7 +962,10 @@ mod tests {
             </VRTRasterBand></VRTDataset>";
         fs::write(dir.join("bad.vrt"), vrt).unwrap();
         let err = parse_vrt(&dir.join("bad.vrt")).unwrap_err();
-        assert!(matches!(err, InsarError::UnsupportedFormat(_)), "got: {err:?}");
+        assert!(
+            matches!(err, InsarError::UnsupportedFormat(_)),
+            "got: {err:?}"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -983,7 +1004,11 @@ mod tests {
         let (rows, cols) = (3, 4);
         let src = "raw.bin";
         write_raw_2band(&dir.join(src), rows, cols);
-        fs::write(dir.join("raw.vrt"), synthetic_vrt_2band_orden_invertido(src, rows, cols)).unwrap();
+        fs::write(
+            dir.join("raw.vrt"),
+            synthetic_vrt_2band_orden_invertido(src, rows, cols),
+        )
+        .unwrap();
 
         let layout = parse_vrt(&dir.join("raw.vrt")).unwrap();
         // bands[0] debe ser la banda declarada band="1" (image_offset 0),
@@ -1016,7 +1041,10 @@ mod tests {
             </VRTRasterBand></VRTDataset>";
         fs::write(dir.join("bad.vrt"), vrt).unwrap();
         let err = parse_vrt(&dir.join("bad.vrt")).unwrap_err();
-        assert!(matches!(err, InsarError::UnsupportedFormat(_)), "got: {err:?}");
+        assert!(
+            matches!(err, InsarError::UnsupportedFormat(_)),
+            "got: {err:?}"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -1030,7 +1058,10 @@ mod tests {
             </VRTRasterBand></VRTDataset>";
         fs::write(dir.join("bad.vrt"), vrt).unwrap();
         let err = parse_vrt(&dir.join("bad.vrt")).unwrap_err();
-        assert!(matches!(err, InsarError::UnsupportedFormat(_)), "got: {err:?}");
+        assert!(
+            matches!(err, InsarError::UnsupportedFormat(_)),
+            "got: {err:?}"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -1082,7 +1113,10 @@ mod tests {
         assert_eq!(stack.data[[0, 1, 2]], band2_val(1, 2));
 
         // Flag apagado → fase cruda (0.5 en (0,0)).
-        let config = IsceLoadConfig { mask_zero_amplitude: false, ..Default::default() };
+        let config = IsceLoadConfig {
+            mask_zero_amplitude: false,
+            ..Default::default()
+        };
         let stack = read_isce_unwrapped_stack(&root, &config).unwrap();
         assert_eq!(stack.data[[0, 0, 0]], band2_val(0, 0));
 
@@ -1101,11 +1135,18 @@ mod tests {
         let (rows, cols) = (3, 4);
         let cor_src = "filt_fine.cor";
         write_raw_2band(&pair.join(cor_src), rows, cols);
-        fs::write(pair.join("filt_fine.cor.vrt"), synthetic_vrt_2band(cor_src, rows, cols)).unwrap();
+        fs::write(
+            pair.join("filt_fine.cor.vrt"),
+            synthetic_vrt_2band(cor_src, rows, cols),
+        )
+        .unwrap();
 
         // mask_zero_amplitude=false: aísla la lectura de banda de la lógica
         // de enmascarado (ya cubierta por otros tests).
-        let config = IsceLoadConfig { mask_zero_amplitude: false, ..IsceLoadConfig::default() };
+        let config = IsceLoadConfig {
+            mask_zero_amplitude: false,
+            ..IsceLoadConfig::default()
+        };
         let coh = read_isce_coherence(&root, &config).unwrap();
         assert_eq!(coh.dim(), (1, rows, cols));
         for r in 0..rows {
@@ -1155,9 +1196,15 @@ mod tests {
         );
         fs::write(pair.join("filt_fine.cor.vrt"), vrt).unwrap();
 
-        let config = IsceLoadConfig { mask_zero_amplitude: false, ..IsceLoadConfig::default() };
+        let config = IsceLoadConfig {
+            mask_zero_amplitude: false,
+            ..IsceLoadConfig::default()
+        };
         let err = read_isce_coherence(&root, &config).unwrap_err();
-        assert!(matches!(err, InsarError::UnsupportedFormat(_)), "got: {err:?}");
+        assert!(
+            matches!(err, InsarError::UnsupportedFormat(_)),
+            "got: {err:?}"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1180,8 +1227,10 @@ mod tests {
         let root = minimal_isce_stack("bl_empty");
         let bdir = root.join("baselines");
         fs::create_dir_all(&bdir).unwrap();
-        let config =
-            IsceLoadConfig { baselines_dir: Some(bdir), ..Default::default() };
+        let config = IsceLoadConfig {
+            baselines_dir: Some(bdir),
+            ..Default::default()
+        };
         let err = read_isce_unwrapped_stack(&root, &config).unwrap_err();
         assert!(matches!(err, InsarError::Metadata(_)), "got: {err:?}");
         let _ = fs::remove_dir_all(&root);
@@ -1209,8 +1258,10 @@ mod tests {
         )
         .unwrap();
 
-        let config =
-            IsceLoadConfig { baselines_dir: Some(bdir), ..Default::default() };
+        let config = IsceLoadConfig {
+            baselines_dir: Some(bdir),
+            ..Default::default()
+        };
         let stack = read_isce_unwrapped_stack(&root, &config).unwrap();
         assert_eq!(stack.pairs[0].perp_baseline_m, 50.0, "promedio de swaths");
         assert_eq!(stack.pairs[1].perp_baseline_m, 0.0, "par sin entrada → 0");
@@ -1218,7 +1269,13 @@ mod tests {
     }
 
     /// .vrt sintético de 1 banda con el dtype dado (raw plano BSQ).
-    fn synthetic_vrt_1band(src: &str, rows: usize, cols: usize, dtype: &str, elem: usize) -> String {
+    fn synthetic_vrt_1band(
+        src: &str,
+        rows: usize,
+        cols: usize,
+        dtype: &str,
+        elem: usize,
+    ) -> String {
         let pixel_offset = elem;
         let line_offset = elem * cols;
         format!(
@@ -1309,7 +1366,11 @@ mod tests {
         for r in 0..rows {
             for c in 0..cols {
                 // Píxel (0,0) = 0+0i → NoData de ISCE.
-                let re: f32 = if (r, c) == (0, 0) { 0.0 } else { (r * 10 + c) as f32 };
+                let re: f32 = if (r, c) == (0, 0) {
+                    0.0
+                } else {
+                    (r * 10 + c) as f32
+                };
                 let im: f32 = if (r, c) == (0, 0) { 0.0 } else { 0.5 };
                 buf.extend_from_slice(&re.to_le_bytes());
                 buf.extend_from_slice(&im.to_le_bytes());
@@ -1369,7 +1430,10 @@ mod tests {
         let (inc, az) = read_isce_los(&dir.join("los.rdr")).unwrap();
         assert_eq!(inc[[0, 0]], 30.0);
         assert_eq!(az[[0, 1]], 102.5);
-        assert!(inc[[1, 1]].is_nan() && az[[1, 1]].is_nan(), "(0,0) es NoData");
+        assert!(
+            inc[[1, 1]].is_nan() && az[[1, 1]].is_nan(),
+            "(0,0) es NoData"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -1392,9 +1456,7 @@ mod tests {
     fn isce_real_fernandina_stack() {
         use crate::network;
 
-        let base = Path::new(
-            "/home/franciscoparrao/proyectos/insar-rs/data/FernandinaSenDT128",
-        );
+        let base = Path::new("/home/franciscoparrao/proyectos/insar-rs/data/FernandinaSenDT128");
         let ifg_dir = base.join("merged/interferograms");
         if !ifg_dir.exists() {
             eprintln!("datos reales ausentes; saltando");

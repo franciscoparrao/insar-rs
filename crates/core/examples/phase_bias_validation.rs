@@ -20,8 +20,7 @@ use std::path::PathBuf;
 use chrono::NaiveDate;
 use insar_core::io::licsar::{Aoi, LicsarLoadConfig, read_licsar_stack};
 use insar_core::phase_bias::{
-    PhaseBiasConfig, closure_rms, correct_phase_bias, estimate_bias_terms,
-    estimate_coefficients,
+    PhaseBiasConfig, closure_rms, correct_phase_bias, estimate_bias_terms, estimate_coefficients,
 };
 use insar_core::types::IfgStack;
 use ndarray::{Array3, Axis};
@@ -35,7 +34,10 @@ const BLOCK: usize = 8;
 struct Lcg(u64);
 impl Lcg {
     fn next_f32(&mut self) -> f32 {
-        self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        self.0 = self
+            .0
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         ((self.0 >> 33) as f32) / ((1u64 << 31) as f32)
     }
 }
@@ -48,7 +50,10 @@ fn corrected_reduction(
     stack: &IfgStack,
     coefficients: Vec<f64>,
 ) -> Result<f64, Box<dyn std::error::Error>> {
-    let cfg = PhaseBiasConfig { coefficients: Some(coefficients), ..Default::default() };
+    let cfg = PhaseBiasConfig {
+        coefficients: Some(coefficients),
+        ..Default::default()
+    };
     let (before, _) = closure_rms(stack, cfg.max_span)?;
     let mut s = stack.clone();
     correct_phase_bias(&mut s, &cfg)?;
@@ -137,15 +142,31 @@ fn apply_bias_terms(stack: &mut IfgStack, delta: &Array3<f32>, coefficients: &[f
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dir = PathBuf::from(
-        std::env::args().nth(1).unwrap_or_else(|| "data/licsar_083D_12636/GEOC".to_string()),
+        std::env::args()
+            .nth(1)
+            .unwrap_or_else(|| "data/licsar_083D_12636/GEOC".to_string()),
     );
     let d = |s: &str| NaiveDate::parse_from_str(s, "%Y%m%d").unwrap();
-    let aoi = Aoi { min_lon: -72.20, max_lon: -71.80, min_lat: -36.80, max_lat: -36.40 };
+    let aoi = Aoi {
+        min_lon: -72.20,
+        max_lon: -71.80,
+        min_lat: -36.80,
+        max_lat: -36.40,
+    };
 
     // Coeficientes de escena (red completa, ancla span 12).
     let est = estimate_coefficients(
-        &read_licsar_stack(&dir, &LicsarLoadConfig { aoi: Some(aoi), ..Default::default() })?,
-        &PhaseBiasConfig { anchor_days: 72.0, ..Default::default() },
+        &read_licsar_stack(
+            &dir,
+            &LicsarLoadConfig {
+                aoi: Some(aoi),
+                ..Default::default()
+            },
+        )?,
+        &PhaseBiasConfig {
+            anchor_days: 72.0,
+            ..Default::default()
+        },
     )?;
     println!("coeficientes de escena: {:?}", est.coefficients);
 
@@ -173,8 +194,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut null_reds = Vec::with_capacity(NULL_RUNS);
     for seed in 0..NULL_RUNS as u64 {
         let mut rng = Lcg(0x9E3779B97F4A7C15 ^ (seed * 0xD1B54A32D192ED03 + 1));
-        let mut data =
-            Array3::<Complex32>::zeros((stack.pairs.len(), NULL_GRID, NULL_GRID));
+        let mut data = Array3::<Complex32>::zeros((stack.pairs.len(), NULL_GRID, NULL_GRID));
         for v in data.iter_mut() {
             let phi = (rng.next_f32() * 2.0 - 1.0) * std::f32::consts::PI;
             *v = Complex32::from_polar(1.0, phi);
@@ -215,8 +235,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // El mismo hold-out sobre el nulo: cuánto sobrevive el sobreajuste al donut.
     {
         let mut rng = Lcg(0xC0FFEE);
-        let mut data =
-            Array3::<Complex32>::zeros((stack.pairs.len(), NULL_GRID, NULL_GRID));
+        let mut data = Array3::<Complex32>::zeros((stack.pairs.len(), NULL_GRID, NULL_GRID));
         for v in data.iter_mut() {
             let phi = (rng.next_f32() * 2.0 - 1.0) * std::f32::consts::PI;
             *v = Complex32::from_polar(1.0, phi);
@@ -233,7 +252,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut nh = null_stack.clone();
         apply_bias_terms(&mut nh, &ndd, &est.coefficients);
         let (na, _) = closure_rms(&nh, cfg.max_span)?;
-        println!("    control: hold-out sobre el nulo: {:.1}%  (≈0 esperado)", reduction(nb, na));
+        println!(
+            "    control: hold-out sobre el nulo: {:.1}%  (≈0 esperado)",
+            reduction(nb, na)
+        );
     }
 
     // ── 4. Sensibilidad a los coeficientes (in-sample, solo referencia) ────
@@ -293,7 +315,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .collect();
             for span in 2..=3usize {
                 for start in 0..s.epochs.len().saturating_sub(span) {
-                    let Some(&long) = index.get(&(start, start + span)) else { continue };
+                    let Some(&long) = index.get(&(start, start + span)) else {
+                        continue;
+                    };
                     let chain: Option<Vec<usize>> = (start..start + span)
                         .map(|i| index.get(&(i, i + 1)).copied())
                         .collect();
@@ -305,7 +329,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 let n = z.norm();
                                 (n.is_finite() && n > 0.0).then(|| z / n)
                             };
-                            let Some(mut z) = unit(s.data[[long, r, c]]) else { continue };
+                            let Some(mut z) = unit(s.data[[long, r, c]]) else {
+                                continue;
+                            };
                             let mut ok = true;
                             for &k in &chain {
                                 match unit(s.data[[k, r, c]]) {
@@ -328,8 +354,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         topo_closures(s).mapv(|z| if z.norm() > 0.0 { z.arg() } else { f32::NAN })
     };
 
-    let strata: [(&str, f32, f32); 3] =
-        [("coh<0.3", 0.0, 0.3), ("0.3-0.5", 0.3, 0.5), ("coh>=0.5", 0.5, f32::INFINITY)];
+    let strata: [(&str, f32, f32); 3] = [
+        ("coh<0.3", 0.0, 0.3),
+        ("0.3-0.5", 0.3, 0.5),
+        ("coh>=0.5", 0.5, f32::INFINITY),
+    ];
     let stratum_mean = |m: &ndarray::Array2<f32>, lo: f32, hi: f32| -> (f64, usize) {
         let (mut s, mut n) = (0.0f64, 0usize);
         for ((r, c), v) in m.indexed_iter() {
@@ -349,8 +378,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (name, lo, hi) in strata {
         let (b, n) = stratum_mean(&m_before, lo, hi);
         let (a, _) = stratum_mean(&m_donut, lo, hi);
-        println!("    {name:<10} {b:+.4} → {a:+.4}   ({n} px, reducción {:.0}%)",
-                 100.0 * (1.0 - a.abs() / b.abs()));
+        println!(
+            "    {name:<10} {b:+.4} → {a:+.4}   ({n} px, reducción {:.0}%)",
+            100.0 * (1.0 - a.abs() / b.abs())
+        );
         systematic.push((name.to_string(), b, a, n));
     }
     // Equivalente en velocidad: sesgo unitario medio acumulado sobre la
@@ -374,8 +405,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 if ok {
-                    cum[[r, c]] = (-(wavelength / (4.0 * std::f64::consts::PI)) * s / years
-                        * 1000.0) as f32;
+                    cum[[r, c]] =
+                        (-(wavelength / (4.0 * std::f64::consts::PI)) * s / years * 1000.0) as f32;
                 }
             }
         }
@@ -399,7 +430,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let g_before = global_mean_abs(&m_before);
     let mut sens_sys = Vec::new();
     for (name, coefs) in &sets {
-        let cfg_s = PhaseBiasConfig { coefficients: Some(coefs.clone()), ..Default::default() };
+        let cfg_s = PhaseBiasConfig {
+            coefficients: Some(coefs.clone()),
+            ..Default::default()
+        };
         let d_s = estimate_bias_terms(&stack, &cfg_s)?;
         let dd_s = donut_block_mean(&d_s, BLOCK, 0);
         let mut h_s = stack.clone();
@@ -434,8 +468,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Control: cierre medio sobre el nulo i.i.d., antes vs tras hold-out.
     {
         let mut rng = Lcg(0xFACADE);
-        let mut data =
-            Array3::<Complex32>::zeros((stack.pairs.len(), NULL_GRID, NULL_GRID));
+        let mut data = Array3::<Complex32>::zeros((stack.pairs.len(), NULL_GRID, NULL_GRID));
         for v in data.iter_mut() {
             let phi = (rng.next_f32() * 2.0 - 1.0) * std::f32::consts::PI;
             *v = Complex32::from_polar(1.0, phi);
@@ -461,11 +494,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Export de mapas para la figura nueva (cierre medio antes/después +
     // equivalente en velocidad del sesgo removido).
     let dump = |path: &str, m: &ndarray::Array2<f32>| -> std::io::Result<()> {
-        fs::write(path, m.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>())
+        fs::write(
+            path,
+            m.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>(),
+        )
     };
     fs::create_dir_all("validation/phase_bias_export")?;
-    dump("validation/phase_bias_export/mean_closure_before.f32", &m_before)?;
-    dump("validation/phase_bias_export/mean_closure_after.f32", &m_donut)?;
+    dump(
+        "validation/phase_bias_export/mean_closure_before.f32",
+        &m_before,
+    )?;
+    dump(
+        "validation/phase_bias_export/mean_closure_after.f32",
+        &m_donut,
+    )?;
     {
         let mut cum = ndarray::Array2::<f32>::from_elem((rows, cols), f32::NAN);
         for r in 0..rows {
@@ -481,12 +523,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 if ok {
-                    cum[[r, c]] = (-(wavelength / (4.0 * std::f64::consts::PI)) * s / years
-                        * 1000.0) as f32;
+                    cum[[r, c]] =
+                        (-(wavelength / (4.0 * std::f64::consts::PI)) * s / years * 1000.0) as f32;
                 }
             }
         }
-        dump("validation/phase_bias_export/vel_bias_removed_mmyr.f32", &cum)?;
+        dump(
+            "validation/phase_bias_export/vel_bias_removed_mmyr.f32",
+            &cum,
+        )?;
     }
 
     let out = serde_json::json!({

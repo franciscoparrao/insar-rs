@@ -19,30 +19,46 @@ use insar_core::inversion::{
 use insar_core::types::{Epoch, IfgPair, StackMeta, UnwrappedStack};
 
 #[derive(Deserialize)]
-struct PairJson { reference: usize, secondary: usize, perp_baseline_m: f64 }
+struct PairJson {
+    reference: usize,
+    secondary: usize,
+    perp_baseline_m: f64,
+}
 #[derive(Deserialize)]
 struct Meta {
-    wavelength_m: f64, incidence_deg: f64,
-    n_epochs: usize, n_pairs: usize, rows: usize, cols: usize,
-    epochs: Vec<String>, pairs: Vec<PairJson>,
+    wavelength_m: f64,
+    incidence_deg: f64,
+    n_epochs: usize,
+    n_pairs: usize,
+    rows: usize,
+    cols: usize,
+    epochs: Vec<String>,
+    pairs: Vec<PairJson>,
 }
 
 fn read_f32(path: &Path, n: usize) -> Vec<f32> {
     let mut b = Vec::new();
     fs::File::open(path).unwrap().read_to_end(&mut b).unwrap();
     assert_eq!(b.len(), n * 4, "tamaño {}", path.display());
-    b.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
+    b.chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect()
 }
 fn write_f32(path: &Path, d: &[f32]) {
     let mut b = Vec::with_capacity(d.len() * 4);
-    for &v in d { b.extend_from_slice(&v.to_le_bytes()); }
+    for &v in d {
+        b.extend_from_slice(&v.to_le_bytes());
+    }
     fs::write(path, b).unwrap();
 }
 
 fn main() {
-    let dir = std::env::args().nth(1).unwrap_or_else(|| "validation/maule_export".into());
+    let dir = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "validation/maule_export".into());
     let dir = Path::new(&dir);
-    let meta: Meta = serde_json::from_str(&fs::read_to_string(dir.join("meta.json")).unwrap()).unwrap();
+    let meta: Meta =
+        serde_json::from_str(&fs::read_to_string(dir.join("meta.json")).unwrap()).unwrap();
     let (np, nr, nc) = (meta.n_pairs, meta.rows, meta.cols);
     println!("Maule: {} épocas, {np} pares, {nr}×{nc}", meta.n_epochs);
 
@@ -53,13 +69,26 @@ fn main() {
 
     let mut stack = UnwrappedStack {
         data,
-        epochs: meta.epochs.iter().map(|s| Epoch(s.parse().unwrap())).collect(),
-        pairs: meta.pairs.iter().map(|p| IfgPair {
-            reference: p.reference, secondary: p.secondary, perp_baseline_m: p.perp_baseline_m,
-        }).collect(),
+        epochs: meta
+            .epochs
+            .iter()
+            .map(|s| Epoch(s.parse().unwrap()))
+            .collect(),
+        pairs: meta
+            .pairs
+            .iter()
+            .map(|p| IfgPair {
+                reference: p.reference,
+                secondary: p.secondary,
+                perp_baseline_m: p.perp_baseline_m,
+            })
+            .collect(),
         meta: StackMeta {
-            transform: GeoTransform::new(0.0, 0.0, 1.0, -1.0), crs: None,
-            wavelength_m: meta.wavelength_m, incidence_deg: meta.incidence_deg, heading_deg: None,
+            transform: GeoTransform::new(0.0, 0.0, 1.0, -1.0),
+            crs: None,
+            wavelength_m: meta.wavelength_m,
+            incidence_deg: meta.incidence_deg,
+            heading_deg: None,
         },
     };
 
@@ -78,16 +107,26 @@ fn main() {
         for c in 0..nc {
             let (mut s, mut k, mut cov) = (0.0f64, 0u32, 0u32);
             for p in 0..np {
-                if stack.data[[p, r, c]].is_finite() { cov += 1; }
+                if stack.data[[p, r, c]].is_finite() {
+                    cov += 1;
+                }
                 let v = coh[[p, r, c]];
-                if v.is_finite() { s += v as f64; k += 1; }
+                if v.is_finite() {
+                    s += v as f64;
+                    k += 1;
+                }
             }
             let mean_coh = if k > 0 { s / k as f64 } else { 0.0 };
             let score = cov as f64 * 2.0 + mean_coh; // cobertura domina
-            if score > best_score { best_score = score; best = (r, c); }
+            if score > best_score {
+                best_score = score;
+                best = (r, c);
+            }
         }
     }
-    let cov = (0..np).filter(|&p| stack.data[[p, best.0, best.1]].is_finite()).count();
+    let cov = (0..np)
+        .filter(|&p| stack.data[[p, best.0, best.1]].is_finite())
+        .count();
     println!("referencia: {:?} cobertura {}/{} pares", best, cov, np);
     reference_to_pixel(&mut stack, best.0, best.1).unwrap();
 
@@ -111,7 +150,8 @@ fn main() {
         let dem_vec = read_f32(&dem_path, nr * nc);
         let dem = Array3::from_shape_vec((1, nr, nc), dem_vec).unwrap();
         let dem = dem.index_axis(ndarray::Axis(0), 0).to_owned();
-        insar_core::troposphere::correct_topo_series(&mut series, &dem, Some(&mask), 1, true).unwrap();
+        insar_core::troposphere::correct_topo_series(&mut series, &dem, Some(&mask), 1, true)
+            .unwrap();
         println!("corrección troposférica topo-correlacionada aplicada");
     }
     // Deramp por época sobre píxeles coherentes (quita atmósfera/órbita de gran
@@ -124,29 +164,46 @@ fn main() {
                 let (mut s, mut k) = (0.0f64, 0u32);
                 for p in 0..np {
                     let v = coh[[p, r, c]];
-                    if v.is_finite() { s += v as f64; k += 1; }
+                    if v.is_finite() {
+                        s += v as f64;
+                        k += 1;
+                    }
                 }
                 mask[[r, c]] = k > 0 && (s / k as f64) > 0.7;
             }
         }
         insar_core::postprocess::deramp_series(
-            &mut series, insar_core::postprocess::RampKind::Linear, Some(&mask),
-        ).unwrap();
+            &mut series,
+            insar_core::postprocess::RampKind::Linear,
+            Some(&mask),
+        )
+        .unwrap();
         println!("deramp por época aplicado (máscara coherencia>0.7)");
     }
     let vel = estimate_velocity(&series).unwrap();
-    println!("inversión + velocidad + coherencia: {:.2}s", t.elapsed().as_secs_f64());
+    println!(
+        "inversión + velocidad + coherencia: {:.2}s",
+        t.elapsed().as_secs_f64()
+    );
 
     // Velocidad de deformación: extremo entre píxeles coherentes (cm/año).
     let mut peak = 0.0f32;
-    for r in 0..nr { for c in 0..nc {
-        let v = vel.data[[r, c]];
-        if v.is_finite() && tcoh[[r, c]] > 0.7 && v.abs() > peak.abs() { peak = v; }
-    }}
+    for r in 0..nr {
+        for c in 0..nc {
+            let v = vel.data[[r, c]];
+            if v.is_finite() && tcoh[[r, c]] > 0.7 && v.abs() > peak.abs() {
+                peak = v;
+            }
+        }
+    }
     let med = {
         let mut g: Vec<f32> = tcoh.iter().copied().filter(|x| x.is_finite()).collect();
         g.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        if g.is_empty() { f32::NAN } else { g[g.len() / 2] }
+        if g.is_empty() {
+            f32::NAN
+        } else {
+            g[g.len() / 2]
+        }
     };
     println!("velocidad LOS máx (γ>0.7): {:.1} cm/año", peak * 100.0);
     println!("coherencia temporal mediana: {:.3}", med);

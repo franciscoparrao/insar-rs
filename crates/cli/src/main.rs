@@ -5,7 +5,11 @@ use insar_core::pipeline::{SbasPipelineConfig, run_sbas};
 use insar_core::postprocess::RampKind;
 
 #[derive(Parser)]
-#[command(name = "insar", version, about = "Motor InSAR time-series (PS-InSAR + SBAS) en Rust")]
+#[command(
+    name = "insar",
+    version,
+    about = "Motor InSAR time-series (PS-InSAR + SBAS) en Rust"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -42,7 +46,10 @@ enum UnwrapBackendArg {
 /// 8 elementos y este slice pattern haría panic).
 fn parse_ref_region(v: Vec<usize>) -> anyhow::Result<(usize, usize, usize, usize)> {
     let [r0, c0, r1, c1] = v[..] else {
-        anyhow::bail!("--ref-region requiere exactamente 4 valores, recibidos {}", v.len());
+        anyhow::bail!(
+            "--ref-region requiere exactamente 4 valores, recibidos {}",
+            v.len()
+        );
     };
     if r0 > r1 || c0 > c1 {
         anyhow::bail!("--ref-region inválido: mín ({r0},{c0}) > máx ({r1},{c1})");
@@ -364,7 +371,10 @@ fn main() -> anyhow::Result<()> {
                     products.pairs_lost_by_reference
                 );
             }
-            println!("escrito: {}/velocity.tif + temporal_coherence.tif + series/", output.display());
+            println!(
+                "escrito: {}/velocity.tif + temporal_coherence.tif + series/",
+                output.display()
+            );
         }
         Command::Decompose {
             asc_los,
@@ -389,16 +399,24 @@ fn main() -> anyhow::Result<()> {
                 incidence_deg,
                 heading_deg: Some(heading_deg),
             };
-            let asc = insar_core::io::read_velocity(&asc_los, meta_for(asc_incidence_deg, asc_heading_deg))?;
-            let desc =
-                insar_core::io::read_velocity(&desc_los, meta_for(desc_incidence_deg, desc_heading_deg))?;
+            let asc = insar_core::io::read_velocity(
+                &asc_los,
+                meta_for(asc_incidence_deg, asc_heading_deg),
+            )?;
+            let desc = insar_core::io::read_velocity(
+                &desc_los,
+                meta_for(desc_incidence_deg, desc_heading_deg),
+            )?;
 
             let geom_asc = LosVector::from_incidence_heading(asc_incidence_deg, asc_heading_deg);
             let geom_desc = LosVector::from_incidence_heading(desc_incidence_deg, desc_heading_deg);
             let decomposed = decompose_asc_desc(&asc.data, geom_asc, &desc.data, geom_desc)?;
 
             std::fs::create_dir_all(&output)?;
-            let wrap = |d| insar_core::types::VelocityMap { data: d, meta: asc.meta.clone() };
+            let wrap = |d| insar_core::types::VelocityMap {
+                data: d,
+                meta: asc.meta.clone(),
+            };
             insar_core::io::write_velocity(&wrap(decomposed.up), &output.join("up.tif"))?;
             insar_core::io::write_velocity(&wrap(decomposed.east), &output.join("east.tif"))?;
             println!("escrito: {}/up.tif + east.tif", output.display());
@@ -444,7 +462,12 @@ fn main() -> anyhow::Result<()> {
                 maps.feature_names().join(",")
             );
         }
-        Command::Deramp { series_dir, output, kind, wavelength_m } => {
+        Command::Deramp {
+            series_dir,
+            output,
+            kind,
+            wavelength_m,
+        } => {
             use insar_core::postprocess::deramp_series;
             use insar_core::types::StackMeta;
 
@@ -460,7 +483,13 @@ fn main() -> anyhow::Result<()> {
             insar_core::io::write_series(&series, &output)?;
             println!("escrito: {}/ (serie deramp)", output.display());
         }
-        Command::Aps { series_dir, output, spatial_sigma_px, temporal_window_epochs, wavelength_m } => {
+        Command::Aps {
+            series_dir,
+            output,
+            spatial_sigma_px,
+            temporal_window_epochs,
+            wavelength_m,
+        } => {
             use insar_core::atmosphere::{ApsConfig, correct_aps};
             use insar_core::types::StackMeta;
 
@@ -472,12 +501,24 @@ fn main() -> anyhow::Result<()> {
                 heading_deg: None,
             };
             let mut series = insar_core::io::read_series(&series_dir, meta)?;
-            let config = ApsConfig { spatial_sigma_px, temporal_window_epochs };
+            let config = ApsConfig {
+                spatial_sigma_px,
+                temporal_window_epochs,
+            };
             correct_aps(&mut series, &config)?;
             insar_core::io::write_series(&series, &output)?;
-            println!("escrito: {}/ (serie con APS turbulento removido)", output.display());
+            println!(
+                "escrito: {}/ (serie con APS turbulento removido)",
+                output.display()
+            );
         }
-        Command::TropoEra5 { series_dir, delay_dir, output, wavelength_m, reference_epoch } => {
+        Command::TropoEra5 {
+            series_dir,
+            delay_dir,
+            output,
+            wavelength_m,
+            reference_epoch,
+        } => {
             use insar_core::troposphere::era5::correct_era5_series;
             use insar_core::types::StackMeta;
 
@@ -579,7 +620,9 @@ fn main() -> anyhow::Result<()> {
             ref_col,
             ref_region,
         } => {
-            use insar_core::inversion::{DemErrorConfig, IrlsConfig, SbasSolverConfig, WeightScheme};
+            use insar_core::inversion::{
+                DemErrorConfig, IrlsConfig, SbasSolverConfig, WeightScheme,
+            };
             use insar_core::io::isce::IsceLoadConfig;
             use insar_core::pipeline::{IsceSbasConfig, run_sbas_isce};
 
@@ -593,20 +636,31 @@ fn main() -> anyhow::Result<()> {
                 // "weighting != Unit"); este chequeo previo da un mensaje
                 // específico de --wls sin leer el directorio dos veces si no
                 // hace falta (el check solo dispara cuando --wls está activo).
-                let probe = IsceLoadConfig { baselines_dir: baselines.clone(), ..Default::default() };
+                let probe = IsceLoadConfig {
+                    baselines_dir: baselines.clone(),
+                    ..Default::default()
+                };
                 if let Err(e) = insar_core::io::isce::read_isce_coherence(&input, &probe) {
                     anyhow::bail!("--wls requiere los .cor de coherencia: {e}");
                 }
             }
 
             let config = IsceSbasConfig {
-                load: IsceLoadConfig { baselines_dir: baselines, ..Default::default() },
+                load: IsceLoadConfig {
+                    baselines_dir: baselines,
+                    ..Default::default()
+                },
                 correct_unwrap: !no_closure_correction,
                 reference: ref_row.zip(ref_col),
                 reference_region,
                 solver: SbasSolverConfig {
-                    weighting: if wls { WeightScheme::InversePhaseVariance } else { WeightScheme::Unit },
-                    dem_error: dem_error_range.map(|slant_range_m| DemErrorConfig { slant_range_m }),
+                    weighting: if wls {
+                        WeightScheme::InversePhaseVariance
+                    } else {
+                        WeightScheme::Unit
+                    },
+                    dem_error: dem_error_range
+                        .map(|slant_range_m| DemErrorConfig { slant_range_m }),
                     robust: robust.then(IrlsConfig::default),
                 },
                 deramp: deramp.map(RampKind::from),
@@ -643,7 +697,10 @@ fn main() -> anyhow::Result<()> {
             insar_core::io::write_series(&products.series, &output.join("series"))?;
             // Los mapas de calidad comparten el writer Float32 (mismo meta).
             let meta = products.series.meta.clone();
-            let wrap = |d| insar_core::types::VelocityMap { data: d, meta: meta.clone() };
+            let wrap = |d| insar_core::types::VelocityMap {
+                data: d,
+                meta: meta.clone(),
+            };
             insar_core::io::write_velocity(
                 &wrap(products.temporal_coherence),
                 &output.join("temporal_coherence.tif"),

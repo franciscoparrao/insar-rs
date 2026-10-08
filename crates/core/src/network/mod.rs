@@ -16,7 +16,10 @@ pub struct SbasConfig {
 
 impl Default for SbasConfig {
     fn default() -> Self {
-        Self { max_temporal_baseline_days: 60, max_perp_baseline_m: 200.0 }
+        Self {
+            max_temporal_baseline_days: 60,
+            max_perp_baseline_m: 200.0,
+        }
     }
 }
 
@@ -58,7 +61,11 @@ pub fn build_network(
             if dt_days.abs() <= config.max_temporal_baseline_days
                 && db_perp.abs() <= config.max_perp_baseline_m
             {
-                pairs.push(IfgPair { reference: i, secondary: j, perp_baseline_m: db_perp });
+                pairs.push(IfgPair {
+                    reference: i,
+                    secondary: j,
+                    perp_baseline_m: db_perp,
+                });
             }
         }
     }
@@ -148,7 +155,10 @@ pub fn is_connected(pairs: &[IfgPair], n_epochs: usize) -> bool {
         if p.reference >= n_epochs || p.secondary >= n_epochs {
             return false; // índice fuera de rango: red inválida, no panic
         }
-        let (ra, rb) = (find(&mut parent, p.reference), find(&mut parent, p.secondary));
+        let (ra, rb) = (
+            find(&mut parent, p.reference),
+            find(&mut parent, p.secondary),
+        );
         if ra != rb {
             parent[ra] = rb;
         }
@@ -171,7 +181,11 @@ mod tests {
     }
 
     fn pair(i: usize, j: usize) -> IfgPair {
-        IfgPair { reference: i, secondary: j, perp_baseline_m: 0.0 }
+        IfgPair {
+            reference: i,
+            secondary: j,
+            perp_baseline_m: 0.0,
+        }
     }
 
     // ---------- build_network ----------
@@ -182,12 +196,14 @@ mod tests {
         // Δt: (0,1)=12 ✓ (0,2)=24 ✓ (0,3)=36 ✗ (1,2)=12 ✓ (1,3)=24 ✓ (2,3)=12 ✓
         let epochs = epochs_12d(4);
         let baselines = [0.0, 50.0, -30.0, 100.0];
-        let config = SbasConfig { max_temporal_baseline_days: 25, max_perp_baseline_m: 200.0 };
+        let config = SbasConfig {
+            max_temporal_baseline_days: 25,
+            max_perp_baseline_m: 200.0,
+        };
 
         let pairs = build_network(&epochs, &baselines, &config).unwrap();
 
-        let idx: Vec<(usize, usize)> =
-            pairs.iter().map(|p| (p.reference, p.secondary)).collect();
+        let idx: Vec<(usize, usize)> = pairs.iter().map(|p| (p.reference, p.secondary)).collect();
         assert_eq!(idx, vec![(0, 1), (0, 2), (1, 2), (1, 3), (2, 3)]);
 
         // Baseline del par = b[j] - b[i], verificable a mano.
@@ -201,7 +217,10 @@ mod tests {
         // pero con umbral 90 m: (0,1)=50 ✓ (0,2)=-30 ✓ (1,2)=-80 ✓ (1,3)=450 ✗ (2,3)=530 ✗
         let epochs = epochs_12d(4);
         let baselines = [0.0, 50.0, -30.0, 500.0];
-        let config = SbasConfig { max_temporal_baseline_days: 25, max_perp_baseline_m: 90.0 };
+        let config = SbasConfig {
+            max_temporal_baseline_days: 25,
+            max_perp_baseline_m: 90.0,
+        };
 
         // La época 3 queda sin aristas → red desconectada → error.
         let err = build_network(&epochs, &baselines, &config).unwrap_err();
@@ -212,7 +231,10 @@ mod tests {
     fn red_vacia_es_error() {
         let epochs = epochs_12d(3);
         let baselines = [0.0, 10.0, 20.0];
-        let config = SbasConfig { max_temporal_baseline_days: 5, max_perp_baseline_m: 200.0 };
+        let config = SbasConfig {
+            max_temporal_baseline_days: 5,
+            max_perp_baseline_m: 200.0,
+        };
         let err = build_network(&epochs, &baselines, &config).unwrap_err();
         assert!(matches!(err, InsarError::InvalidNetwork(_)));
     }
@@ -252,7 +274,10 @@ mod tests {
             .map(|&d| Epoch(start + chrono::Duration::days(d)))
             .collect();
         let baselines = [0.0, 10.0, 20.0, 30.0];
-        let config = SbasConfig { max_temporal_baseline_days: 25, max_perp_baseline_m: 200.0 };
+        let config = SbasConfig {
+            max_temporal_baseline_days: 25,
+            max_perp_baseline_m: 200.0,
+        };
         let err = build_network(&epochs, &baselines, &config).unwrap_err();
         assert!(matches!(err, InsarError::InvalidNetwork(_)));
     }

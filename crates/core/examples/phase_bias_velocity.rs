@@ -94,15 +94,31 @@ fn write_vel(
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dir = PathBuf::from(
-        std::env::args().nth(1).unwrap_or_else(|| "data/licsar_083D_12636/GEOC".to_string()),
+        std::env::args()
+            .nth(1)
+            .unwrap_or_else(|| "data/licsar_083D_12636/GEOC".to_string()),
     );
     let d = |s: &str| NaiveDate::parse_from_str(s, "%Y%m%d").unwrap();
-    let aoi = Aoi { min_lon: -72.20, max_lon: -71.80, min_lat: -36.80, max_lat: -36.40 };
+    let aoi = Aoi {
+        min_lon: -72.20,
+        max_lon: -71.80,
+        min_lat: -36.80,
+        max_lat: -36.40,
+    };
 
     // Coeficientes (red completa con ancla teselable).
     let est = estimate_coefficients(
-        &read_licsar_stack(&dir, &LicsarLoadConfig { aoi: Some(aoi), ..Default::default() })?,
-        &PhaseBiasConfig { anchor_days: 72.0, ..Default::default() },
+        &read_licsar_stack(
+            &dir,
+            &LicsarLoadConfig {
+                aoi: Some(aoi),
+                ..Default::default()
+            },
+        )?,
+        &PhaseBiasConfig {
+            anchor_days: 72.0,
+            ..Default::default()
+        },
     )?;
     println!("coeficientes aₙ = {:?}", est.coefficients);
 
@@ -117,18 +133,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut stack_corr = stack_biased.clone();
     correct_phase_bias(
         &mut stack_corr,
-        &PhaseBiasConfig { coefficients: Some(est.coefficients.clone()), ..Default::default() },
+        &PhaseBiasConfig {
+            coefficients: Some(est.coefficients.clone()),
+            ..Default::default()
+        },
     )?;
     println!(
         "stacks: {} pares × {:?} px, {} épocas | coherencia {:?}",
-        stack_biased.n_layers(), stack_biased.dims(), stack_biased.epochs.len(), coh.dim()
+        stack_biased.n_layers(),
+        stack_biased.dims(),
+        stack_biased.epochs.len(),
+        coh.dim()
     );
 
     let refrc = pick_reference(&coh);
     let mcoh = mean_coherence(&coh);
     println!("píxel de referencia: {refrc:?} (coh mín {:.2})", {
         let col = coh.slice(ndarray::s![.., refrc.0, refrc.1]);
-        col.iter().cloned().filter(|v| v.is_finite()).fold(f32::INFINITY, f32::min)
+        col.iter()
+            .cloned()
+            .filter(|v| v.is_finite())
+            .fold(f32::INFINITY, f32::min)
     });
 
     let vel_biased = to_velocity(&stack_biased, &coh, refrc)?;
@@ -160,12 +185,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut vals: Vec<f32> = diff.iter().copied().filter(|v| v.is_finite()).collect();
     vals.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let pct = |q: f64| vals[((vals.len() as f64 - 1.0) * q) as usize];
-    println!("  mediana: {:+.3} | P10: {:+.3} | P90: {:+.3}", pct(0.5), pct(0.10), pct(0.90));
+    println!(
+        "  mediana: {:+.3} | P10: {:+.3} | P90: {:+.3}",
+        pct(0.5),
+        pct(0.10),
+        pct(0.90)
+    );
 
     std::fs::create_dir_all("docs/phase_bias/figs")?;
     let (gt, crs) = (vel_biased.meta.transform, vel_biased.meta.crs.clone());
-    write_vel(&vel_biased.data, gt, crs.clone(), "docs/phase_bias/figs/vel_biased_mpyr.tif")?;
-    write_vel(&vel_corr.data, gt, crs.clone(), "docs/phase_bias/figs/vel_corrected_mpyr.tif")?;
+    write_vel(
+        &vel_biased.data,
+        gt,
+        crs.clone(),
+        "docs/phase_bias/figs/vel_biased_mpyr.tif",
+    )?;
+    write_vel(
+        &vel_corr.data,
+        gt,
+        crs.clone(),
+        "docs/phase_bias/figs/vel_corrected_mpyr.tif",
+    )?;
     write_vel(&diff, gt, crs, "docs/phase_bias/figs/vel_bias_mmpyr.tif")?;
     println!("\nGeoTIFF escritos en docs/phase_bias/figs/");
     Ok(())

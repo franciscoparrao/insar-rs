@@ -34,7 +34,9 @@ pub struct SnaphuConfig {
 
 impl Default for SnaphuConfig {
     fn default() -> Self {
-        Self { binary: PathBuf::from("snaphu") }
+        Self {
+            binary: PathBuf::from("snaphu"),
+        }
     }
 }
 
@@ -77,9 +79,12 @@ fn read_float_raw(path: &Path, rows: usize, cols: usize) -> Result<Array2<f32>> 
             bytes.len()
         )));
     }
-    let data: Vec<f32> =
-        bytes.chunks_exact(4).map(|c| f32::from_ne_bytes([c[0], c[1], c[2], c[3]])).collect();
-    Array2::from_shape_vec((rows, cols), data).map_err(|e| InsarError::DimensionMismatch(e.to_string()))
+    let data: Vec<f32> = bytes
+        .chunks_exact(4)
+        .map(|c| f32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
+    Array2::from_shape_vec((rows, cols), data)
+        .map_err(|e| InsarError::DimensionMismatch(e.to_string()))
 }
 
 /// Texto del archivo de config de snaphu. Usa nombres de archivo
@@ -98,7 +103,9 @@ fn snaphu_config_text(has_corr: bool) -> String {
         "INFILEFORMAT FLOAT_DATA\nOUTFILE {OUTFILE_NAME}\nOUTFILEFORMAT FLOAT_DATA\nSTATCOSTMODE SMOOTH\n",
     );
     if has_corr {
-        conf.push_str(&format!("CORRFILE {CORRFILE_NAME}\nCORRFILEFORMAT FLOAT_DATA\n"));
+        conf.push_str(&format!(
+            "CORRFILE {CORRFILE_NAME}\nCORRFILEFORMAT FLOAT_DATA\n"
+        ));
     }
     conf
 }
@@ -163,7 +170,11 @@ fn run_snaphu(
         // es válida: no-finito → 0.0 ("no confiable"), el resto a [0, 1].
         let masked = Array2::from_shape_fn((rows, cols), |(r, c)| {
             let v = q[[r, c]];
-            if nan_mask[[r, c]] || !v.is_finite() { 0.0 } else { v.clamp(0.0, 1.0) }
+            if nan_mask[[r, c]] || !v.is_finite() {
+                0.0
+            } else {
+                v.clamp(0.0, 1.0)
+            }
         });
         write_float_raw(&corr_path, &masked)?;
         true
@@ -250,7 +261,7 @@ pub fn unwrap_stack_snaphu(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{Epoch, IfgPair, StackMeta, SENTINEL1_WAVELENGTH_M};
+    use crate::types::{Epoch, IfgPair, SENTINEL1_WAVELENGTH_M, StackMeta};
     use num_complex::Complex32;
     use surtgis_core::GeoTransform;
 
@@ -288,8 +299,16 @@ mod tests {
             data,
             epochs,
             pairs: vec![
-                IfgPair { reference: 0, secondary: 1, perp_baseline_m: 40.0 },
-                IfgPair { reference: 1, secondary: 2, perp_baseline_m: -25.0 },
+                IfgPair {
+                    reference: 0,
+                    secondary: 1,
+                    perp_baseline_m: 40.0,
+                },
+                IfgPair {
+                    reference: 1,
+                    secondary: 2,
+                    perp_baseline_m: -25.0,
+                },
             ],
             meta: meta(),
         };
@@ -298,21 +317,32 @@ mod tests {
 
     /// Compara `unw` contra `truth` relativo a un píxel de referencia (ambos
     /// algoritmos solo recuperan la fase salvo un offset aditivo 2πk).
-    fn assert_matches_ramp(unw: &Array2<f32>, truth: &Array2<f32>, reference: (usize, usize), tol: f32) {
+    fn assert_matches_ramp(
+        unw: &Array2<f32>,
+        truth: &Array2<f32>,
+        reference: (usize, usize),
+        tol: f32,
+    ) {
         let (rr, rc) = reference;
         let u0 = unw[[rr, rc]];
         let t0 = truth[[rr, rc]];
         assert!(u0.is_finite(), "referencia {reference:?} quedó NaN");
         for ((r, c), &u) in unw.indexed_iter() {
             let err = ((u - u0) - (truth[[r, c]] - t0)).abs();
-            assert!(err < tol, "({r},{c}): unw={u} truth={} err={err}", truth[[r, c]]);
+            assert!(
+                err < tol,
+                "({r},{c}): unw={u} truth={} err={err}",
+                truth[[r, c]]
+            );
         }
     }
 
     #[test]
     fn binario_ausente_da_error_io() {
         let wrapped = wrap(&ramp(4, 4, 0.3, 0.2));
-        let config = SnaphuConfig { binary: "insar-rs-snaphu-no-existe-nunca".into() };
+        let config = SnaphuConfig {
+            binary: "insar-rs-snaphu-no-existe-nunca".into(),
+        };
         let err = unwrap_2d_snaphu(&wrapped, None, &config).unwrap_err();
         assert!(matches!(err, InsarError::Io { .. }), "got: {err:?}");
     }
@@ -331,15 +361,25 @@ mod tests {
             // espacios, esta línea tendría 3+ tokens.
             for line in conf.lines() {
                 let tokens: Vec<&str> = line.split_whitespace().collect();
-                assert_eq!(tokens.len(), 2, "línea con más de 2 tokens (¿ruta con espacios?): {line:?}");
+                assert_eq!(
+                    tokens.len(),
+                    2,
+                    "línea con más de 2 tokens (¿ruta con espacios?): {line:?}"
+                );
             }
-            assert!(conf.contains(&format!("OUTFILE {OUTFILE_NAME}\n")), "conf: {conf}");
+            assert!(
+                conf.contains(&format!("OUTFILE {OUTFILE_NAME}\n")),
+                "conf: {conf}"
+            );
             assert!(
                 !conf.contains('/') && !conf.contains('\\'),
                 "OUTFILE/CORRFILE no deben ser rutas (con separador de directorio): {conf}"
             );
             if has_corr {
-                assert!(conf.contains(&format!("CORRFILE {CORRFILE_NAME}\n")), "conf: {conf}");
+                assert!(
+                    conf.contains(&format!("CORRFILE {CORRFILE_NAME}\n")),
+                    "conf: {conf}"
+                );
             } else {
                 assert!(!conf.contains("CORRFILE"), "conf: {conf}");
             }

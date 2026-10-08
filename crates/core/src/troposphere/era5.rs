@@ -139,7 +139,10 @@ pub fn saastamoinen_zhd(pressure_hpa: f64, lat_deg: f64, height_m: f64) -> f64 {
 ///
 /// Error si el perfil tiene menos de 2 niveles (no hay par para
 /// interpolar/extrapolar).
-fn interpolate_profile(profile: &AtmosphericProfile, target_height_m: f64) -> Result<(f64, f64, f64)> {
+fn interpolate_profile(
+    profile: &AtmosphericProfile,
+    target_height_m: f64,
+) -> Result<(f64, f64, f64)> {
     let n = profile.pressure_hpa.len();
     if n < 2 {
         return Err(InsarError::Inversion(format!(
@@ -163,7 +166,11 @@ fn interpolate_profile(profile: &AtmosphericProfile, target_height_m: f64) -> Re
     if dz.abs() < 1e-9 {
         // Niveles duplicados en altura (o único nivel bracket-eante): sin
         // información para interpolar, usa el primero tal cual.
-        return Ok((profile.pressure_hpa[lo], profile.temperature_k[lo], profile.specific_humidity[lo]));
+        return Ok((
+            profile.pressure_hpa[lo],
+            profile.temperature_k[lo],
+            profile.specific_humidity[lo],
+        ));
     }
     let frac = (target_height_m - z0) / dz;
 
@@ -196,12 +203,18 @@ pub fn integrate_zwd(profile: &AtmosphericProfile, surface_height_m: f64) -> Res
 
     let (p_surf, t_surf, q_surf) = interpolate_profile(profile, surface_height_m)?;
     let mut levels: Vec<(f64, f64)> = vec![(surface_height_m, n_wet_at(t_surf, q_surf, p_surf))];
-    levels.extend((0..profile.pressure_hpa.len()).filter(|&i| profile.height_m[i] > surface_height_m).map(
-        |i| {
-            let n_wet = n_wet_at(profile.temperature_k[i], profile.specific_humidity[i], profile.pressure_hpa[i]);
-            (profile.height_m[i], n_wet)
-        },
-    ));
+    levels.extend(
+        (0..profile.pressure_hpa.len())
+            .filter(|&i| profile.height_m[i] > surface_height_m)
+            .map(|i| {
+                let n_wet = n_wet_at(
+                    profile.temperature_k[i],
+                    profile.specific_humidity[i],
+                    profile.pressure_hpa[i],
+                );
+                (profile.height_m[i], n_wet)
+            }),
+    );
     levels.sort_by(|a, b| a.0.total_cmp(&b.0));
     levels.dedup_by(|a, b| (a.0 - b.0).abs() < 1e-9);
 
@@ -337,7 +350,10 @@ mod tests {
         let sea_level = saastamoinen_zhd(1013.25, -33.0, 0.0);
         let altiplano = saastamoinen_zhd(700.0, -33.0, 3000.0);
         assert!(altiplano < sea_level, "{altiplano} vs {sea_level}");
-        assert!(altiplano > 1.0 && altiplano < 2.0, "ZHD altiplano {altiplano} implausible");
+        assert!(
+            altiplano > 1.0 && altiplano < 2.0,
+            "ZHD altiplano {altiplano} implausible"
+        );
     }
 
     #[test]
@@ -349,16 +365,25 @@ mod tests {
     fn vapor_pressure_rango_plausible() {
         // q=10 g/kg (húmedo, costero) a P=1000 hPa → e de orden 10-20 hPa.
         let e = vapor_pressure_hpa(0.010, 1000.0);
-        assert!((10.0..20.0).contains(&e), "e={e} hPa fuera de rango plausible");
+        assert!(
+            (10.0..20.0).contains(&e),
+            "e={e} hPa fuera de rango plausible"
+        );
     }
 
     /// Perfil sintético con humedad decayendo exponencialmente con la altura
     /// (razonable: la mayoría del vapor de agua está en los primeros ~2 km).
     fn perfil_humedo(surface_q: f64) -> AtmosphericProfile {
         let heights: Vec<f64> = (0..15).map(|i| i as f64 * 1000.0).collect();
-        let pressure: Vec<f64> = heights.iter().map(|h| 1013.25 * (-h / 8000.0).exp()).collect();
+        let pressure: Vec<f64> = heights
+            .iter()
+            .map(|h| 1013.25 * (-h / 8000.0).exp())
+            .collect();
         let temperature: Vec<f64> = heights.iter().map(|h| 288.15 - 0.0065 * h).collect();
-        let humidity: Vec<f64> = heights.iter().map(|h| surface_q * (-h / 2000.0).exp()).collect();
+        let humidity: Vec<f64> = heights
+            .iter()
+            .map(|h| surface_q * (-h / 2000.0).exp())
+            .collect();
         AtmosphericProfile {
             pressure_hpa: pressure,
             temperature_k: temperature,
@@ -371,7 +396,10 @@ mod tests {
     fn zwd_atmosfera_seca_es_nula() {
         let perfil = perfil_humedo(0.0);
         let zwd = integrate_zwd(&perfil, 0.0).unwrap();
-        assert!(zwd.abs() < 1e-9, "ZWD {zwd} debería ser exactamente 0 sin vapor de agua");
+        assert!(
+            zwd.abs() < 1e-9,
+            "ZWD {zwd} debería ser exactamente 0 sin vapor de agua"
+        );
     }
 
     #[test]
@@ -379,7 +407,10 @@ mod tests {
         // 12 g/kg en superficie (costa húmeda) → ZWD típico 0.03-0.4 m.
         let perfil = perfil_humedo(0.012);
         let zwd = integrate_zwd(&perfil, 0.0).unwrap();
-        assert!((0.03..0.4).contains(&zwd), "ZWD {zwd} m fuera del rango físico esperado");
+        assert!(
+            (0.03..0.4).contains(&zwd),
+            "ZWD {zwd} m fuera del rango físico esperado"
+        );
     }
 
     #[test]
@@ -421,15 +452,24 @@ mod tests {
         let (_, t0, q0) = interpolate_profile(&perfil, 0.0).unwrap();
         let (_, t500, q500) = interpolate_profile(&perfil, 500.0).unwrap();
         let (_, t1000, q1000) = interpolate_profile(&perfil, 1000.0).unwrap();
-        assert!(t0 > t500 && t500 > t1000, "temperatura debe decrecer con la altura");
-        assert!(q0 > q500 && q500 > q1000, "humedad debe decrecer con la altura");
+        assert!(
+            t0 > t500 && t500 > t1000,
+            "temperatura debe decrecer con la altura"
+        );
+        assert!(
+            q0 > q500 && q500 > q1000,
+            "humedad debe decrecer con la altura"
+        );
     }
 
     #[test]
     fn interpolate_profile_extrapola_fuera_de_rango_sin_error() {
         let perfil = perfil_humedo(0.012);
         let (p, _, _) = interpolate_profile(&perfil, 20000.0).unwrap();
-        assert!(p > 0.0 && p.is_finite(), "extrapolación log-lineal debe dar presión positiva finita");
+        assert!(
+            p > 0.0 && p.is_finite(),
+            "extrapolación log-lineal debe dar presión positiva finita"
+        );
     }
 
     #[test]
@@ -440,7 +480,10 @@ mod tests {
             specific_humidity: vec![0.01],
             height_m: vec![0.0],
         };
-        assert!(matches!(interpolate_profile(&perfil, 0.0).unwrap_err(), InsarError::Inversion(_)));
+        assert!(matches!(
+            interpolate_profile(&perfil, 0.0).unwrap_err(),
+            InsarError::Inversion(_)
+        ));
     }
 
     /// Regresión A-8: antes de interpolar, `integrate_zwd(surface=500)`
@@ -468,7 +511,10 @@ mod tests {
         let zhd = saastamoinen_zhd(perfil.pressure_hpa[0], -33.0, 0.0);
         assert!((total - (zhd + zwd)).abs() < 1e-9);
         // Rango físico típico de latitudes medias: 2.0-2.8 m total.
-        assert!((2.0..2.8).contains(&total), "retardo total {total} implausible");
+        assert!(
+            (2.0..2.8).contains(&total),
+            "retardo total {total} implausible"
+        );
     }
 
     #[test]
@@ -494,13 +540,23 @@ mod tests {
         assert!(project_to_los(2.3, 95.0).is_err());
     }
 
-    fn serie_constante(n_epochs: usize, rows: usize, cols: usize, valor: f32) -> DisplacementSeries {
+    fn serie_constante(
+        n_epochs: usize,
+        rows: usize,
+        cols: usize,
+        valor: f32,
+    ) -> DisplacementSeries {
         use crate::types::{Epoch, StackMeta};
         use chrono::NaiveDate;
         DisplacementSeries {
             data: Array3::from_elem((n_epochs, rows, cols), valor),
             epochs: (0..n_epochs)
-                .map(|i| Epoch(NaiveDate::from_ymd_opt(2026, 1, 1).unwrap() + chrono::Duration::days(i as i64 * 12)))
+                .map(|i| {
+                    Epoch(
+                        NaiveDate::from_ymd_opt(2026, 1, 1).unwrap()
+                            + chrono::Duration::days(i as i64 * 12),
+                    )
+                })
                 .collect(),
             meta: StackMeta {
                 transform: surtgis_core::GeoTransform::default(),
@@ -545,7 +601,10 @@ mod tests {
         correct_era5_series(&mut series, &delay, 0).unwrap();
 
         assert!((series.data[[1, 0, 0]] - (1.0 + 0.03)).abs() < 1e-6);
-        assert!((series.data[[1, 0, 1]] - 1.0).abs() < 1e-6, "píxel NaN no debería cambiar");
+        assert!(
+            (series.data[[1, 0, 1]] - 1.0).abs() < 1e-6,
+            "píxel NaN no debería cambiar"
+        );
     }
 
     #[test]

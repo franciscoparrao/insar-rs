@@ -77,24 +77,47 @@ fn aggregate_rms(
             n_px += 1;
         }
     }
-    if n_obs == 0 { (f64::NAN, 0) } else { ((sum_sq / n_obs as f64).sqrt(), n_px) }
+    if n_obs == 0 {
+        (f64::NAN, 0)
+    } else {
+        ((sum_sq / n_obs as f64).sqrt(), n_px)
+    }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dir = PathBuf::from(
-        std::env::args().nth(1).unwrap_or_else(|| "data/licsar_083D_12636/GEOC".to_string()),
+        std::env::args()
+            .nth(1)
+            .unwrap_or_else(|| "data/licsar_083D_12636/GEOC".to_string()),
     );
     let d = |s: &str| NaiveDate::parse_from_str(s, "%Y%m%d").unwrap();
-    let aoi = Aoi { min_lon: -72.20, max_lon: -71.80, min_lat: -36.80, max_lat: -36.40 };
+    let aoi = Aoi {
+        min_lon: -72.20,
+        max_lon: -71.80,
+        min_lat: -36.80,
+        max_lat: -36.40,
+    };
 
     // Coeficientes de la red completa (con ancla teselable, span 12 ≈ 72 d).
     let est = estimate_coefficients(
-        &read_licsar_stack(&dir, &LicsarLoadConfig { aoi: Some(aoi), ..Default::default() })?,
-        &PhaseBiasConfig { anchor_days: 72.0, ..Default::default() },
+        &read_licsar_stack(
+            &dir,
+            &LicsarLoadConfig {
+                aoi: Some(aoi),
+                ..Default::default()
+            },
+        )?,
+        &PhaseBiasConfig {
+            anchor_days: 72.0,
+            ..Default::default()
+        },
     )?;
     println!(
         "coeficientes aₙ = {:?}  ({} anclas)",
-        est.coefficients.iter().map(|c| format!("{c:.3}")).collect::<Vec<_>>(),
+        est.coefficients
+            .iter()
+            .map(|c| format!("{c:.3}"))
+            .collect::<Vec<_>>(),
         est.n_anchors
     );
 
@@ -143,7 +166,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     println!("\nEstratificado por coherencia media (proxy de cobertura):");
-    println!("{:<28} {:>8} {:>10} {:>10} {:>9}", "estrato", "px", "antes", "después", "reducc.");
+    println!(
+        "{:<28} {:>8} {:>10} {:>10} {:>9}",
+        "estrato", "px", "antes", "después", "reducc."
+    );
     let strata: [(&str, f32, f32); 3] = [
         ("coh < 0.3 (cultivo/bosque)", 0.0, 0.3),
         ("0.3 ≤ coh < 0.5 (mixto)", 0.3, 0.5),
@@ -165,9 +191,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ── GeoTIFF para GIS ───────────────────────────────────────────────────
     fs::create_dir_all("docs/phase_bias/figs")?;
     let (gt, crs) = (stack.meta.transform, stack.meta.crs.clone());
-    write_map(&rms_before, gt, crs.clone(), "docs/phase_bias/figs/closure_rms_before.tif")?;
-    write_map(&rms_after, gt, crs.clone(), "docs/phase_bias/figs/closure_rms_after.tif")?;
-    write_map(&reduction, gt, crs.clone(), "docs/phase_bias/figs/closure_reduction_pct.tif")?;
+    write_map(
+        &rms_before,
+        gt,
+        crs.clone(),
+        "docs/phase_bias/figs/closure_rms_before.tif",
+    )?;
+    write_map(
+        &rms_after,
+        gt,
+        crs.clone(),
+        "docs/phase_bias/figs/closure_rms_after.tif",
+    )?;
+    write_map(
+        &reduction,
+        gt,
+        crs.clone(),
+        "docs/phase_bias/figs/closure_reduction_pct.tif",
+    )?;
     write_map(&mcoh, gt, crs, "docs/phase_bias/figs/mean_coherence.tif")?;
 
     // ── Crudos + meta.json para el script de figuras Python ────────────────
@@ -194,7 +235,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "dlat": gt.pixel_height,
         },
     });
-    fs::write(format!("{out}/meta.json"), serde_json::to_string_pretty(&meta)?)?;
+    fs::write(
+        format!("{out}/meta.json"),
+        serde_json::to_string_pretty(&meta)?,
+    )?;
     println!("\nGeoTIFF en docs/phase_bias/figs/ y crudos en {out}/");
     Ok(())
 }

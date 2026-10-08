@@ -282,16 +282,21 @@ pub fn run_sbas(config: &SbasPipelineConfig) -> Result<SbasProducts> {
     //     pantalla de corrección φ − φᶜ y se resta tras el desenrollado.
     let (phase_bias_report, bias_screen) = match &config.phase_bias {
         Some(pb_config) => match config.phase_bias_stage {
-            PhaseBiasStage::BeforeUnwrap => {
-                (Some(phase_bias::correct_phase_bias(&mut stack, pb_config)?), None)
-            }
+            PhaseBiasStage::BeforeUnwrap => (
+                Some(phase_bias::correct_phase_bias(&mut stack, pb_config)?),
+                None,
+            ),
             PhaseBiasStage::AfterUnwrap => {
                 let mut corrected = stack.clone();
                 let report = phase_bias::correct_phase_bias(&mut corrected, pb_config)?;
                 let screen = ndarray::Zip::from(&stack.data)
                     .and(&corrected.data)
                     .map_collect(|zb, zc| {
-                        if zb.norm() > 0.0 && zc.norm() > 0.0 { (zb * zc.conj()).arg() } else { 0.0 }
+                        if zb.norm() > 0.0 && zc.norm() > 0.0 {
+                            (zb * zc.conj()).arg()
+                        } else {
+                            0.0
+                        }
                     });
                 (Some(report), Some(screen))
             }
@@ -313,11 +318,13 @@ pub fn run_sbas(config: &SbasPipelineConfig) -> Result<SbasProducts> {
     //     pequeña (|aₙ·Σδ̂| ≪ π en casi todo píxel), así que restarla no
     //     requiere re-desenrollar.
     if let Some(screen) = &bias_screen {
-        ndarray::Zip::from(&mut unwrapped.data).and(screen).for_each(|u, &s| {
-            if u.is_finite() {
-                *u -= s;
-            }
-        });
+        ndarray::Zip::from(&mut unwrapped.data)
+            .and(screen)
+            .for_each(|u, &s| {
+                if u.is_finite() {
+                    *u -= s;
+                }
+            });
     }
 
     // 4) Corrección de errores de desenrollado por cierre de fase + QC.
@@ -379,16 +386,25 @@ pub fn run_sbas(config: &SbasPipelineConfig) -> Result<SbasProducts> {
     fs::create_dir_all(&config.output_dir).with_path(&config.output_dir)?;
     io::write_velocity(&velocity, &config.output_dir.join("velocity.tif"))?;
     io::write_series(&series, &config.output_dir.join("series"))?;
-    let as_map = |data: Array2<f32>| VelocityMap { data, meta: series.meta.clone() };
+    let as_map = |data: Array2<f32>| VelocityMap {
+        data,
+        meta: series.meta.clone(),
+    };
     io::write_velocity(
         &as_map(gamma.clone()),
         &config.output_dir.join("temporal_coherence.tif"),
     )?;
     if let Some(dem) = &solution.dem_error_m {
-        io::write_velocity(&as_map(dem.clone()), &config.output_dir.join("dem_error.tif"))?;
+        io::write_velocity(
+            &as_map(dem.clone()),
+            &config.output_dir.join("dem_error.tif"),
+        )?;
     }
     if let Some(qc) = &closure_qc {
-        io::write_velocity(&as_map(qc.clone()), &config.output_dir.join("closure_qc.tif"))?;
+        io::write_velocity(
+            &as_map(qc.clone()),
+            &config.output_dir.join("closure_qc.tif"),
+        )?;
     }
 
     Ok(SbasProducts {
