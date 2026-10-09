@@ -47,7 +47,7 @@ plt.rcParams.update({
     "xtick.labelsize": 7, "ytick.labelsize": 7,
     "xtick.direction": "in", "ytick.direction": "in", "pdf.fonttype": 42,
 })
-INK, C_G, C_B, C_P = "#24303a", "#0072B2", "#7a8791", "#D55E00"
+INK, C_G, C_B, C_P = "#24303a", "#0072B2", "#7a8791", "#009E73"  # C_P = verde "after" de la Fig. 6d
 
 
 def los(st):

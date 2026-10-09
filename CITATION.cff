@@ -14,6 +14,12 @@ identifiers:
   - type: doi
     value: "10.5281/zenodo.21924287"
     description: "Concept DOI (all versions)"
+  - type: doi
+    value: "10.5281/zenodo.23257559"
+    description: "Version DOI (v0.3.0)"
+  - type: doi
+    value: "10.5281/zenodo.23253879"
+    description: "Ñuble AOI input dataset (COMET-LiCSAR crop) used in the phase-bias case study"
 abstract: >-
   A native Rust engine for InSAR time-series analysis of ground deformation
   from Sentinel-1 data (PS-InSAR and Small-Baseline Subset), with a native

@@ -103,7 +103,8 @@ Archived copy with DOI on Zenodo:
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21924287.svg)](https://doi.org/10.5281/zenodo.21924287)
 
 - **Concept DOI** (all versions, cite this one): [`10.5281/zenodo.21924287`](https://doi.org/10.5281/zenodo.21924287)
-- Version DOIs are listed on the Zenodo record.
+- **Version DOI** (v0.3.0): [`10.5281/zenodo.23257559`](https://doi.org/10.5281/zenodo.23257559)
+- **Input dataset** of the Ñuble phase-bias case study (COMET-LiCSAR crop, Open Government Licence v3.0): [`10.5281/zenodo.23253879`](https://doi.org/10.5281/zenodo.23253879)
 
 To cite, see [`CITATION.cff`](CITATION.cff) (GitHub's "Cite this repository"
 button) or the metadata in [`.zenodo.json`](.zenodo.json).

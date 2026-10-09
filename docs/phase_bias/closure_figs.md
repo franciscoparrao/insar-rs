@@ -122,5 +122,5 @@ la figura RMS (`fig_closure.pdf`) queda como material histórico/cautionary.
 
 GNSS: `figs/fig_gnss_supp.pdf` (apéndice del paper) — CLL1 (NGL, SA-fixed)
 +4.3 mm/año LOS vs flood-fill −37.0/+26.7 en el píxel de la estación.
-Datos de entrada archivables: `data/nuble_aoi_input_archive.tar.gz` (107 MB,
+Datos de entrada archivables: `data/nuble_aoi_input_archive.tar.gz` (111 MB; archivado en Zenodo 10.5281/zenodo.23253879,
 171 pares AOI, para el deposit Zenodo — LiCSAR podó 91 pares del archivo).

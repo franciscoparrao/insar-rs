@@ -4,7 +4,7 @@
   "creators": [
     {
       "name": "Parra, Francisco",
-      "affiliation": "Department of Informatics Engineering, Universidad de Santiago de Chile (USACH)",
+      "affiliation": "Department of Informatics Engineering, Universidad de Santiago de Chile, Santiago, Chile",
       "orcid": "0009-0006-0435-1854"
     }
   ],
@@ -31,6 +31,11 @@
     {
       "identifier": "10.5281/zenodo.21924287",
       "relation": "isVersionOf",
+      "scheme": "doi"
+    },
+    {
+      "identifier": "10.5281/zenodo.23253879",
+      "relation": "isSupplementedBy",
       "scheme": "doi"
     }
   ]

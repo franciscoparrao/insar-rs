@@ -133,7 +133,7 @@ cb = fig.colorbar(im, ax=ax, location="right", shrink=0.85, pad=0.02)
 cb.set_label("Δ velocity (µm yr$^{-1}$)", fontsize=7)
 cb.ax.tick_params(labelsize=6)
 cb.outline.set_linewidth(0.5)
-ax.text(0.03, 0.04, f"RMSE = {rmse_v:.2f} µm yr$^{{-1}}$", transform=ax.transAxes,
+ax.text(0.03, 0.04, f"RMSE = {rmse_v:.3f} µm yr$^{{-1}}$", transform=ax.transAxes,
         va="bottom", fontsize=7)
 
 # (c) histograma de diferencias de la serie (µm)
